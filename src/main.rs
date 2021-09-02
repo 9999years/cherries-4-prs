@@ -39,6 +39,11 @@ pub async fn main() -> eyre::Result<()> {
             .send()
             .await?
     );
+    // next: get reviews
+    // https://docs.rs/octocrab/0.12.0/octocrab/pulls/struct.PullRequestHandler.html#method.list_reviews
+
+    // - correlate bonusly users <-> github users
+    // - watch for changes over time
 
     Ok(())
 }
