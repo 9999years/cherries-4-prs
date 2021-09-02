@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use std::fs::read_to_string;
+use std::{convert::TryInto, fs::read_to_string};
 
 use color_eyre::eyre::{self, WrapErr};
 use secrecy::SecretString;
@@ -28,17 +28,43 @@ pub async fn main() -> eyre::Result<()> {
         .personal_token(creds.github)
         .build()?;
 
-    println!(
-        "{:#?}",
-        github
-            .search()
-            .issues_and_pull_requests(&format!(
-                "is:pr author:{} review:approved org:{}",
-                cfg.github.user, cfg.github.org
-            ))
-            .send()
-            .await?
-    );
+    let updated_prs = github
+        .search()
+        .issues_and_pull_requests(&format!(
+            "is:pr author:{} review:approved org:{} updated:>=2021-08-20T00:00:00-04:00",
+            cfg.github.user, cfg.github.org
+        ))
+        .send()
+        .await?;
+
+    for pr in updated_prs.items {
+        let (org, repo) = {
+            let mut segments = pr
+                .repository_url
+                .path_segments()
+                .ok_or_else(|| eyre::eyre!("bad repo path"))?;
+            segments.next();
+            (
+                segments.next().ok_or_else(|| eyre::eyre!("no org"))?,
+                segments.next().ok_or_else(|| eyre::eyre!("no repo"))?,
+            )
+        };
+        // println!("org: {}, repo: {}, pr: {}", org, repo, pr.id.0);
+        let reviews = github
+            .pulls(org, repo)
+            .list_reviews(pr.number.try_into().expect("why did this api use different types for pr numbers and pr ids and then use the wrong one"))
+            .await?;
+
+        for review in reviews.items {
+            if let Some(octocrab::models::pulls::ReviewState::Approved) = review.state {
+                println!(
+                    "pr {} to {}/{} approved by {}",
+                    pr.number, org, repo, review.user.login
+                );
+            }
+        }
+    }
+
     // next: get reviews
     // https://docs.rs/octocrab/0.12.0/octocrab/pulls/struct.PullRequestHandler.html#method.list_reviews
 
