@@ -1,20 +1,27 @@
 #![allow(unused_imports)]
 
+use std::fs::read_to_string;
+
 use color_eyre::eyre::{self, WrapErr};
+use secrecy::SecretString;
+use serde::Deserialize;
 use structopt::StructOpt;
 use tracing::{event, info, instrument, span, warn, Level};
 
 use cherries_4_prs::*;
 
 #[instrument]
-fn main() -> eyre::Result<()> {
+#[tokio::main]
+pub async fn main() -> eyre::Result<()> {
     let args = Opt::from_args();
     install_tracing(&args.tracing_filter);
     color_eyre::install()?;
 
-    println!("Arguments: {:#?}", args);
+    let creds: Credentials = toml::de::from_str(&read_to_string("xxx_creds.toml")?)?;
 
-    info!("A tracing INFO event");
+    let bonusly = Bonusly::from_token(creds.bonusly);
+
+    println!("{:#?}", bonusly.list_users().await?);
 
     Ok(())
 }
@@ -53,4 +60,17 @@ struct Opt {
     /// See: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/struct.EnvFilter.html
     #[structopt(long, default_value = "info")]
     tracing_filter: String,
+}
+
+#[derive(Deserialize, Clone)]
+struct Credentials {
+    bonusly: String,
+    github: GitHubCredentials,
+}
+
+#[derive(Deserialize, Clone)]
+struct GitHubCredentials {
+    client_id: String,
+    client_secret: String,
+    access_token: String,
 }
