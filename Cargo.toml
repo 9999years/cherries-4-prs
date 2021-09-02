@@ -13,17 +13,18 @@ keywords = ["github", "bonusly"]  # free text
 
 [dependencies]
 color-eyre = "0.5"
+fuzzy-matcher = "0.3"
 octocrab = "0.12"
 reqwest = { version = "0.11", features = ["json"] }
 secrecy = "0.8"
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 structopt = "0"
-toml = "0.5"
 tokio = { version = "1", features = ["full"] }
-tracing = { version = "0", features = ["attributes"] }
+toml = "0.5"
 tracing-error = "0"
 tracing-subscriber = "0"
+tracing = { version = "0", features = ["attributes"] }
 
 # config = { version = "0", features = ["hjson"] }  # also supports ini, yaml
 # termcolor = "1"

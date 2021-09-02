@@ -1,20 +1,20 @@
 use color_eyre::eyre::{self, Report, WrapErr};
-use reqwest::{Client, RequestBuilder};
+use reqwest::{Client as HttpClient, RequestBuilder};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{de::DeserializeOwned, Deserialize};
 
 static BONUSLY_API_URL: &str = "https://bonus.ly/api/v1";
 
-pub struct Bonusly {
+pub struct Client {
     token: SecretString,
-    client: Client,
+    client: HttpClient,
 }
 
-impl Bonusly {
+impl Client {
     pub fn from_token(token: String) -> Self {
-        Bonusly {
+        Client {
             token: SecretString::from(token),
-            client: Client::new(),
+            client: HttpClient::new(),
         }
     }
 
@@ -62,12 +62,12 @@ impl<T> BonuslyResult<T> {
 
 #[derive(Clone, Deserialize, Debug)]
 pub struct User {
-    id: String,
-    short_name: String,
-    full_name: String,
-    display_name: String,
-    first_name: String,
-    last_name: String,
-    email: String,
-    can_receive: bool,
+    pub id: String,
+    pub short_name: String,
+    pub full_name: String,
+    pub display_name: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub email: String,
+    pub can_receive: bool,
 }

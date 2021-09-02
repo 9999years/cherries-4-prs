@@ -19,14 +19,18 @@ pub async fn main() -> eyre::Result<()> {
 
     let creds: Credentials = toml::de::from_str(&read_to_string("xxx_creds.toml")?)?;
     let cfg: Config = toml::de::from_str(&read_to_string("xxx_config.toml")?)?;
+    let users: Vec<bonusly::User> =
+        serde_json::from_str(&read_to_string("xxx_bonusly_users.json")?)?;
 
-    let bonusly = Bonusly::from_token(creds.bonusly);
-
-    // println!("{:#?}", bonusly.list_users().await?);
+    let _bonusly = bonusly::Client::from_token(creds.bonusly);
 
     let github = octocrab::Octocrab::builder()
         .personal_token(creds.github)
         .build()?;
+    //
+    //     let members: Vec<github::User> = github
+    //         .get(format!("orgs/{}/members", cfg.github.org), None::<&()>)
+    //         .await?;
 
     let updated_prs = github
         .search()
@@ -49,17 +53,28 @@ pub async fn main() -> eyre::Result<()> {
                 segments.next().ok_or_else(|| eyre::eyre!("no repo"))?,
             )
         };
-        // println!("org: {}, repo: {}, pr: {}", org, repo, pr.id.0);
+
         let reviews = github
-            .pulls(org, repo)
-            .list_reviews(pr.number.try_into().expect("why did this api use different types for pr numbers and pr ids and then use the wrong one"))
-            .await?;
+                .pulls(org, repo)
+                .list_reviews(pr.number.try_into().expect("why did this api use different types for pr numbers and pr ids and then use the wrong one"))
+                .await?;
 
         for review in reviews.items {
             if let Some(octocrab::models::pulls::ReviewState::Approved) = review.state {
+                let user: github::User = github
+                    .get(format!("users/{}", review.user.login), None::<&()>)
+                    .await?;
+                let email = find_bonusly_email(&users, &user);
                 println!(
-                    "pr {} to {}/{} approved by {}",
-                    pr.number, org, repo, review.user.login
+                    "pr {} to {}/{} approved by {}{}",
+                    pr.number,
+                    org,
+                    repo,
+                    review.user.login,
+                    match email {
+                        Some(email) => format!(" ({})", email),
+                        None => "".to_owned(),
+                    }
                 );
             }
         }
