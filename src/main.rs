@@ -18,10 +18,27 @@ pub async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
     let creds: Credentials = toml::de::from_str(&read_to_string("xxx_creds.toml")?)?;
+    let cfg: Config = toml::de::from_str(&read_to_string("xxx_config.toml")?)?;
 
     let bonusly = Bonusly::from_token(creds.bonusly);
 
-    println!("{:#?}", bonusly.list_users().await?);
+    // println!("{:#?}", bonusly.list_users().await?);
+
+    let github = octocrab::Octocrab::builder()
+        .personal_token(creds.github)
+        .build()?;
+
+    println!(
+        "{:#?}",
+        github
+            .search()
+            .issues_and_pull_requests(&format!(
+                "is:pr author:{} review:approved org:{}",
+                cfg.github.user, cfg.github.org
+            ))
+            .send()
+            .await?
+    );
 
     Ok(())
 }
@@ -65,12 +82,16 @@ struct Opt {
 #[derive(Deserialize, Clone)]
 struct Credentials {
     bonusly: String,
-    github: GitHubCredentials,
+    github: String,
 }
 
 #[derive(Deserialize, Clone)]
-struct GitHubCredentials {
-    client_id: String,
-    client_secret: String,
-    access_token: String,
+struct Config {
+    github: GitHubConfig,
+}
+
+#[derive(Deserialize, Clone)]
+struct GitHubConfig {
+    user: String,
+    org: String,
 }
