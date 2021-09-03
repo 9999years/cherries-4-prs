@@ -32,27 +32,14 @@ pub async fn main() -> eyre::Result<()> {
     //         .get(format!("orgs/{}/members", cfg.github.org), None::<&()>)
     //         .await?;
 
-    let updated_prs = github
-        .search()
-        .issues_and_pull_requests(&format!(
-            "is:pr author:{} review:approved org:{} updated:>=2021-08-20T00:00:00-04:00",
-            cfg.github.user, cfg.github.org
-        ))
-        .send()
+    let updated_prs = cfg
+        .github
+        .prs_since(&github, "2021-08-20T00:00:00-04:00")
         .await?;
 
     for pr in updated_prs.items {
-        let (org, repo) = {
-            let mut segments = pr
-                .repository_url
-                .path_segments()
-                .ok_or_else(|| eyre::eyre!("bad repo path"))?;
-            segments.next();
-            (
-                segments.next().ok_or_else(|| eyre::eyre!("no org"))?,
-                segments.next().ok_or_else(|| eyre::eyre!("no repo"))?,
-            )
-        };
+        let (org, repo) = github::org_repo(&pr)
+            .ok_or_else(|| eyre::eyre!("Couldn't get org/repo from url {}", &pr.repository_url))?;
 
         let reviews = github
                 .pulls(org, repo)
@@ -79,9 +66,6 @@ pub async fn main() -> eyre::Result<()> {
             }
         }
     }
-
-    // next: get reviews
-    // https://docs.rs/octocrab/0.12.0/octocrab/pulls/struct.PullRequestHandler.html#method.list_reviews
 
     // - correlate bonusly users <-> github users
     // - watch for changes over time
@@ -133,11 +117,5 @@ struct Credentials {
 
 #[derive(Deserialize, Clone)]
 struct Config {
-    github: GitHubConfig,
-}
-
-#[derive(Deserialize, Clone)]
-struct GitHubConfig {
-    user: String,
-    org: String,
+    github: github::Config,
 }
