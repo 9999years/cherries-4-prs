@@ -27,16 +27,28 @@ pub async fn main() -> eyre::Result<()> {
     let github = octocrab::Octocrab::builder()
         .personal_token(creds.github)
         .build()?;
-    //
-    //     let members: Vec<github::User> = github
-    //         .get(format!("orgs/{}/members", cfg.github.org), None::<&()>)
-    //         .await?;
 
+    let members: Vec<github::User> = github
+        .get(format!("orgs/{}/members", cfg.github.org), None::<&()>)
+        .await?;
+
+    // xxx_reviews(cfg, github, users)?.await;
+
+    // - correlate bonusly users <-> github users
+    // - watch for changes over time
+
+    Ok(())
+}
+
+async fn xxx_reviews(
+    cfg: Config,
+    github: octocrab::Octocrab,
+    users: Vec<bonusly::User>,
+) -> eyre::Result<()> {
     let updated_prs = cfg
         .github
         .prs_since(&github, "2021-08-20T00:00:00-04:00")
         .await?;
-
     for pr in updated_prs.items {
         let (org, repo) = github::org_repo(&pr)
             .ok_or_else(|| eyre::eyre!("Couldn't get org/repo from url {}", &pr.repository_url))?;
@@ -48,9 +60,7 @@ pub async fn main() -> eyre::Result<()> {
 
         for review in reviews.items {
             if let Some(octocrab::models::pulls::ReviewState::Approved) = review.state {
-                let user: github::User = github
-                    .get(format!("users/{}", review.user.login), None::<&()>)
-                    .await?;
+                let user = github::User::from_login(&github, &review.user.login).await?;
                 let email = find_bonusly_email(&users, &user);
                 println!(
                     "pr {} to {}/{} approved by {}{}",
@@ -66,10 +76,6 @@ pub async fn main() -> eyre::Result<()> {
             }
         }
     }
-
-    // - correlate bonusly users <-> github users
-    // - watch for changes over time
-
     Ok(())
 }
 

@@ -9,6 +9,12 @@ pub struct User {
     pub name: String,
 }
 
+impl User {
+    pub async fn from_login(github: &Octocrab, login: &str) -> Result<Self, octocrab::Error> {
+        github.get(format!("users/{}", login), None::<&()>).await
+    }
+}
+
 #[derive(Deserialize, Clone)]
 pub struct Config {
     pub user: String,
