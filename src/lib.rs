@@ -1,5 +1,7 @@
 #![allow(unused_imports)]
 
+use std::path::PathBuf;
+
 use color_eyre::eyre::{self, WrapErr};
 use serde::Deserialize;
 use tracing::{event, info, instrument, span, warn, Level};
@@ -7,9 +9,21 @@ use tracing::{event, info, instrument, span, warn, Level};
 pub mod bonusly;
 pub mod github;
 
+/// Program state. Deserialized from data dir.
+#[derive(Deserialize, Clone)]
+pub struct State {
+    version: usize,
+    replied_prs: (),
+    /// "Don't look for PRs before this datetime"
+    cutoff: (),
+}
+
+
 #[derive(Deserialize, Clone)]
 pub struct Config {
     pub github: github::Config,
+    pub cherries_per_check: usize,
+    pub data_dir: PathBuf,
 }
 
 impl Config {
