@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use octocrab::{models::issues::Issue, Octocrab, Page};
 use serde::Deserialize;
 
@@ -19,6 +21,8 @@ impl User {
 pub struct Config {
     pub user: String,
     pub org: String,
+    /// Map from GitHub usernames to Starry emails
+    pub emails: HashMap<String, String>,
 }
 
 impl Config {

@@ -1,3 +1,4 @@
+//! See <https://bonusly.docs.apiary.io/>
 use color_eyre::eyre::{self, Report, WrapErr};
 use reqwest::{Client as HttpClient, RequestBuilder};
 use secrecy::{ExposeSecret, SecretString};
@@ -5,12 +6,14 @@ use serde::{de::DeserializeOwned, Deserialize};
 
 static BONUSLY_API_URL: &str = "https://bonus.ly/api/v1";
 
+/// A Bonusly client. See [`Client::from_token`].
 pub struct Client {
     token: SecretString,
     client: HttpClient,
 }
 
 impl Client {
+    /// Construct a client from a token.
     pub fn from_token(token: String) -> Self {
         Client {
             token: SecretString::from(token),
@@ -60,6 +63,7 @@ impl<T> BonuslyResult<T> {
     }
 }
 
+/// A user on Bonusly.
 #[derive(Clone, Deserialize, Debug)]
 pub struct User {
     pub id: String,

@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use std::{convert::TryInto, fs::read_to_string};
+use std::{convert::TryInto, fs::read_to_string, collections::HashMap};
 
 use color_eyre::eyre::{self, WrapErr};
 use secrecy::SecretString;
@@ -61,7 +61,7 @@ async fn xxx_reviews(
         for review in reviews.items {
             if let Some(octocrab::models::pulls::ReviewState::Approved) = review.state {
                 let user = github::User::from_login(&github, &review.user.login).await?;
-                let email = find_bonusly_email(&users, &user);
+                let email = cfg.find_bonusly_email(&users, &user);
                 println!(
                     "pr {} to {}/{} approved by {}{}",
                     pr.number,
@@ -119,9 +119,4 @@ struct Opt {
 struct Credentials {
     bonusly: String,
     github: String,
-}
-
-#[derive(Deserialize, Clone)]
-struct Config {
-    github: github::Config,
 }
