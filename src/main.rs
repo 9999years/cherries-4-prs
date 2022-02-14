@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use std::{convert::TryInto, fs::read_to_string, collections::HashMap};
+use std::{collections::HashMap, convert::TryInto, fs::read_to_string};
 
 use color_eyre::eyre::{self, WrapErr};
 use secrecy::SecretString;
@@ -113,10 +113,4 @@ struct Opt {
     /// See: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/struct.EnvFilter.html
     #[structopt(long, default_value = "info")]
     tracing_filter: String,
-}
-
-#[derive(Deserialize, Clone)]
-struct Credentials {
-    bonusly: String,
-    github: String,
 }

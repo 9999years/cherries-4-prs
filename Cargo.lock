@@ -124,6 +124,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 name = "cherries-4-prs"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "color-eyre",
  "fuzzy-matcher",
  "indoc",
