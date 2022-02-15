@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::{
     collections::HashSet,
@@ -54,9 +55,11 @@ impl Program {
         })
     }
 
-    pub async fn xxx_reviews(&self) -> eyre::Result<Vec<bonusly::Bonus>> {
-        let mut rng = rand::thread_rng();
-        let mut ret = Vec::new();
+    pub async fn new_approved_reviews(
+        &self,
+    ) -> eyre::Result<HashMap<octocrab::models::issues::Issue, Vec<octocrab::models::pulls::Review>>>
+    {
+        let mut ret = HashMap::new();
         let updated_prs = self
             .config
             .github
@@ -76,41 +79,57 @@ impl Program {
                 .list_reviews(pr.number.try_into().unwrap())
                 .await?;
 
+            let mut approved_reviews = Vec::new();
+
             for review in reviews.items {
                 if matches!(
                     review.state,
                     Some(octocrab::models::pulls::ReviewState::Approved)
                 ) && !self.state.replied_prs.contains(&review.id)
                 {
-                    let user =
-                        github::User::from_login(&self.credentials.github, &review.user.login)
-                            .await?;
-                    let email = self
-                        .config
-                        .find_bonusly_email(&self.state.bonusly_users, &user);
-                    println!(
-                        "pr {} to {}/{} approved by {}{}",
-                        pr.number,
-                        org,
-                        repo,
-                        review.user.login,
-                        match &email {
-                            Some(email) => format!(" ({})", email),
-                            None => "".to_owned(),
-                        }
-                    );
+                    approved_reviews.push(review);
+                }
+            }
 
-                    if let Some(email) = email {
-                        ret.push(bonusly::Bonus {
-                            giver_email: self.state.my_bonusly_email.clone(),
-                            receiver_email: email,
-                            amount: self.config.cherries_per_check,
-                            hashtag: self.state.hashtags
-                                [rng.gen_range(0..self.state.hashtags.len())]
-                            .clone(),
-                            reason: format!("thanks for approving my PR! {}", review.html_url),
-                        });
+            if !approved_reviews.is_empty() {
+                ret.insert(pr, approved_reviews);
+            }
+        }
+        Ok(ret)
+    }
+
+    pub async fn xxx_reviews(&self) -> eyre::Result<Vec<bonusly::Bonus>> {
+        let mut rng = rand::thread_rng();
+        let mut ret = Vec::new();
+
+        for (pr, reviews) in self.new_approved_reviews().await?.iter() {
+            for review in revies {
+                let user =
+                    github::User::from_login(&self.credentials.github, &review.user.login).await?;
+                let email = self
+                    .config
+                    .find_bonusly_email(&self.state.bonusly_users, &user);
+                println!(
+                    "pr {} to {}/{} approved by {}{}",
+                    pr.number,
+                    org,
+                    repo,
+                    review.user.login,
+                    match &email {
+                        Some(email) => format!(" ({})", email),
+                        None => "".to_owned(),
                     }
+                );
+
+                if let Some(email) = email {
+                    ret.push(bonusly::Bonus {
+                        giver_email: self.state.my_bonusly_email.clone(),
+                        receiver_email: email,
+                        amount: self.config.cherries_per_check,
+                        hashtag: self.state.hashtags[rng.gen_range(0..self.state.hashtags.len())]
+                            .clone(),
+                        reason: format!("thanks for approving my PR! {}", review.html_url),
+                    });
                 }
             }
         }

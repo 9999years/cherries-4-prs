@@ -97,6 +97,7 @@ impl Client {
 
 #[derive(Clone, Deserialize)]
 pub struct BonuslyResult<T> {
+    #[allow(dead_code)]
     success: bool,
     #[serde(flatten)]
     data: BonuslyResultInner<T>,
