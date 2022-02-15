@@ -38,6 +38,45 @@ impl Client {
             .into_result()
             .map_err(Report::msg)
     }
+
+    pub async fn my_email(&self) -> eyre::Result<String> {
+        Ok(self.me().await?.email)
+    }
+
+    pub async fn me(&self) -> eyre::Result<User> {
+        self.request(reqwest::Method::GET, "/users/me")
+            .send()
+            .await?
+            .json::<BonuslyResult<User>>()
+            .await?
+            .into_result()
+            .map_err(Report::msg)
+    }
+
+    pub async fn company(&self) -> eyre::Result<Company> {
+        self.request(reqwest::Method::GET, "/companies/show")
+            .send()
+            .await?
+            .json::<BonuslyResult<Company>>()
+            .await?
+            .into_result()
+            .map_err(Report::msg)
+    }
+
+    pub async fn hashtags(&self) -> eyre::Result<Vec<String>> {
+        Ok(self.company().await?.company_hashtags)
+    }
+
+    pub async fn send_bonus(&self, bonus: &Bonus) -> eyre::Result<BonusReply> {
+        self.request(reqwest::Method::POST, "/bonuses")
+            .json(bonus)
+            .send()
+            .await?
+            .json::<BonuslyResult<BonusReply>>()
+            .await?
+            .into_result()
+            .map_err(Report::msg)
+    }
 }
 
 #[derive(Clone, Deserialize)]
@@ -74,4 +113,27 @@ pub struct User {
     pub last_name: String,
     pub email: String,
     pub can_receive: bool,
+}
+
+/// A company on Bonusly. Contains the list of hashtags.
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Company {
+    company_hashtags: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct Bonus {
+    pub giver_email: String,
+    pub receiver_email: String,
+    pub amount: usize,
+    /// Includes the leading `#`!
+    pub hashtag: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct BonusReply {
+    id: String,
+    created_at: String,
+    reason: String,
 }

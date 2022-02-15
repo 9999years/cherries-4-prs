@@ -10,6 +10,7 @@ use std::{
 
 use chrono::prelude::*;
 use color_eyre::eyre::{self, WrapErr};
+use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{event, info, instrument, span, warn, Level};
 
@@ -40,7 +41,9 @@ impl Program {
         })
     }
 
-    pub async fn xxx_reviews(&self) -> eyre::Result<()> {
+    pub async fn xxx_reviews(&self) -> eyre::Result<Vec<bonusly::Bonus>> {
+        let mut rng = rand::thread_rng();
+        let mut ret = Vec::new();
         let updated_prs = self
             .config
             .github
@@ -78,15 +81,27 @@ impl Program {
                         org,
                         repo,
                         review.user.login,
-                        match email {
+                        match &email {
                             Some(email) => format!(" ({})", email),
                             None => "".to_owned(),
                         }
                     );
+
+                    if let Some(email) = email {
+                        ret.push(bonusly::Bonus {
+                            giver_email: self.state.my_bonusly_email.clone(),
+                            receiver_email: email,
+                            amount: self.config.cherries_per_check,
+                            hashtag: self.state.hashtags
+                                [rng.gen_range(0..self.state.hashtags.len())]
+                            .clone(),
+                            reason: format!("thanks for approving my PR! {}", review.html_url),
+                        });
+                    }
                 }
             }
         }
-        Ok(())
+        Ok(ret)
     }
 }
 
@@ -105,6 +120,8 @@ pub struct State {
     cutoff: DateTime<Utc>,
     bonusly_users: Vec<bonusly::User>,
     github_members: Vec<github::User>,
+    my_bonusly_email: String,
+    hashtags: Vec<String>,
 }
 
 impl State {
@@ -114,12 +131,16 @@ impl State {
             replied_prs: Default::default(),
             bonusly_users: Default::default(),
             github_members: Default::default(),
+            my_bonusly_email: Default::default(),
+            hashtags: Default::default(),
         };
-        ret.update(credentials, config)?;
+        ret.update(credentials, config).await?;
         Ok(ret)
     }
 
     pub async fn update(&mut self, credentials: &Credentials, config: &Config) -> eyre::Result<()> {
+        self.my_bonusly_email = credentials.bonusly.my_email().await?;
+        self.hashtags = credentials.bonusly.hashtags().await?;
         self.bonusly_users = credentials.bonusly.list_users().await?;
         self.github_members = credentials
             .github
