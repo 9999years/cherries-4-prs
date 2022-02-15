@@ -50,3 +50,10 @@ pub fn org_repo(pr: &Issue) -> Option<(&str, &str)> {
     segments.next(); // "repo"
     Some((segments.next()?, segments.next()?))
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PullRequest {
+    pub org: String,
+    pub repo: String,
+    pub number: i64,
+}

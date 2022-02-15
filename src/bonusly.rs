@@ -2,7 +2,7 @@
 use color_eyre::eyre::{self, Report, WrapErr};
 use reqwest::{Client as HttpClient, RequestBuilder};
 use secrecy::{ExposeSecret, SecretString};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 static BONUSLY_API_URL: &str = "https://bonus.ly/api/v1";
 

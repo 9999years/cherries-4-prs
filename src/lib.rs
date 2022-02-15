@@ -57,8 +57,7 @@ impl Program {
 
     pub async fn new_approved_reviews(
         &self,
-    ) -> eyre::Result<HashMap<octocrab::models::issues::Issue, Vec<octocrab::models::pulls::Review>>>
-    {
+    ) -> eyre::Result<HashMap<github::PullRequest, Vec<octocrab::models::pulls::Review>>> {
         let mut ret = HashMap::new();
         let updated_prs = self
             .config
@@ -79,20 +78,26 @@ impl Program {
                 .list_reviews(pr.number.try_into().unwrap())
                 .await?;
 
-            let mut approved_reviews = Vec::new();
-
-            for review in reviews.items {
-                if matches!(
-                    review.state,
-                    Some(octocrab::models::pulls::ReviewState::Approved)
-                ) && !self.state.replied_prs.contains(&review.id)
-                {
-                    approved_reviews.push(review);
-                }
-            }
+            let approved_reviews = reviews
+                .items
+                .into_iter()
+                .filter(|review| {
+                    matches!(
+                        review.state,
+                        Some(octocrab::models::pulls::ReviewState::Approved)
+                    ) && !self.state.replied_prs.contains(&review.id)
+                })
+                .collect::<Vec<_>>();
 
             if !approved_reviews.is_empty() {
-                ret.insert(pr, approved_reviews);
+                ret.insert(
+                    github::PullRequest {
+                        org: org.to_owned(),
+                        repo: repo.to_owned(),
+                        number: pr.number,
+                    },
+                    approved_reviews,
+                );
             }
         }
         Ok(ret)
@@ -102,8 +107,12 @@ impl Program {
         let mut rng = rand::thread_rng();
         let mut ret = Vec::new();
 
+        // TODO:
+        //  - figure out tracking which prs have been replied to or not
+        //  - reserve prs with no email on a queue for manual attention later
+
         for (pr, reviews) in self.new_approved_reviews().await?.iter() {
-            for review in revies {
+            for review in reviews {
                 let user =
                     github::User::from_login(&self.credentials.github, &review.user.login).await?;
                 let email = self
@@ -112,8 +121,8 @@ impl Program {
                 println!(
                     "pr {} to {}/{} approved by {}{}",
                     pr.number,
-                    org,
-                    repo,
+                    pr.org,
+                    pr.repo,
                     review.user.login,
                     match &email {
                         Some(email) => format!(" ({})", email),
