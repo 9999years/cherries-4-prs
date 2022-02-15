@@ -2,7 +2,7 @@
 use color_eyre::eyre::{self, Report, WrapErr};
 use reqwest::{Client as HttpClient, RequestBuilder};
 use secrecy::{ExposeSecret, SecretString};
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 static BONUSLY_API_URL: &str = "https://bonus.ly/api/v1";
 
@@ -64,7 +64,7 @@ impl<T> BonuslyResult<T> {
 }
 
 /// A user on Bonusly.
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct User {
     pub id: String,
     pub short_name: String,

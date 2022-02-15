@@ -4,25 +4,101 @@ use std::{
     collections::HashSet,
     fs::{self, File},
     io::BufReader,
+    os::unix::prelude::AsRawFd,
     path::{Path, PathBuf},
 };
 
 use chrono::prelude::*;
 use color_eyre::eyre::{self, WrapErr};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{event, info, instrument, span, warn, Level};
 
+pub mod api;
 pub mod bonusly;
 pub mod github;
 
-#[derive(Deserialize, Clone)]
+pub struct Program {
+    credentials: Credentials,
+    config: Config,
+    state: State,
+}
+
+impl Program {
+    pub fn from_config_path(config_path: impl AsRef<Path>) -> eyre::Result<Self> {
+        let config: Config = toml::de::from_str(&fs::read_to_string(&config_path)?)?;
+        let credentials_path = config_path
+            .as_ref()
+            .parent()
+            .ok_or_else(|| eyre::eyre!("Path has no parent: {config_path:?}"))?
+            .join(&config.credentials);
+        let credentials: Credentials = toml::de::from_str(&fs::read_to_string(credentials_path)?)?;
+        let state = State::from_data_path(&config.data_path)?;
+        Ok(Self {
+            config,
+            credentials,
+            state,
+        })
+    }
+
+    pub async fn xxx_reviews(&self) -> eyre::Result<()> {
+        let updated_prs = self
+            .config
+            .github
+            .prs_since(&self.credentials.github, &self.state.cutoff)
+            .await?;
+        for pr in updated_prs.items {
+            let (org, repo) = github::org_repo(&pr).ok_or_else(|| {
+                eyre::eyre!("Couldn't parse org/repo from url {}", &pr.repository_url)
+            })?;
+
+            let reviews = self
+                .credentials
+                .github
+                .pulls(org, repo)
+                // why does this api use different types for pr numbers and pr ids
+                // and then use the wrong one
+                .list_reviews(pr.number.try_into().unwrap())
+                .await?;
+
+            for review in reviews.items {
+                if matches!(
+                    review.state,
+                    Some(octocrab::models::pulls::ReviewState::Approved)
+                ) && !self.state.replied_prs.contains(&review.id)
+                {
+                    let user =
+                        github::User::from_login(&self.credentials.github, &review.user.login)
+                            .await?;
+                    let email = self
+                        .config
+                        .find_bonusly_email(&self.state.bonusly_users, &user);
+                    println!(
+                        "pr {} to {}/{} approved by {}{}",
+                        pr.number,
+                        org,
+                        repo,
+                        review.user.login,
+                        match email {
+                            Some(email) => format!(" ({})", email),
+                            None => "".to_owned(),
+                        }
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(try_from = "api::Credentials")]
 pub struct Credentials {
-    pub bonusly: String,
-    pub github: String,
+    pub bonusly: bonusly::Client,
+    pub github: octocrab::Octocrab,
 }
 
 /// Program state. Deserialized from data dir.
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct State {
     replied_prs: HashSet<octocrab::models::ReviewId>,
     /// "Don't look for PRs before this datetime"
@@ -33,28 +109,31 @@ pub struct State {
 
 impl State {
     pub async fn new(credentials: &Credentials, config: &Config) -> eyre::Result<Self> {
-        let bonusly_client = bonusly::Client::from_token(credentials.bonusly.clone());
-
-        let github_client = octocrab::Octocrab::builder()
-            .personal_token(credentials.github.clone())
-            .build()?;
-
-        Ok(Self {
-            replied_prs: Default::default(),
+        let mut ret = Self {
             cutoff: Utc::now(),
-            bonusly_users: bonusly_client.list_users().await?,
-            github_members: github_client
-                .get(format!("orgs/{}/members", config.github.org), None::<&()>)
-                .await?,
-        })
+            replied_prs: Default::default(),
+            bonusly_users: Default::default(),
+            github_members: Default::default(),
+        };
+        ret.update(credentials, config)?;
+        Ok(ret)
     }
 
-    pub fn from_data_dir(path: impl AsRef<Path>) -> eyre::Result<Self> {
-        fs::create_dir_all(&path)?;
-        let state_path: PathBuf = [path.as_ref(), Path::new("state.json")].iter().collect();
-        Ok(serde_json::from_reader(BufReader::new(File::open(
-            state_path,
-        )?))?)
+    pub async fn update(&mut self, credentials: &Credentials, config: &Config) -> eyre::Result<()> {
+        self.bonusly_users = credentials.bonusly.list_users().await?;
+        self.github_members = credentials
+            .github
+            .get(format!("orgs/{}/members", config.github.org), None::<&()>)
+            .await?;
+        Ok(())
+    }
+
+    pub fn from_data_path(path: impl AsRef<Path>) -> eyre::Result<Self> {
+        if let Some(parent) = path.as_ref().parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // TODO: Create a new default state file if path isnt found
+        Ok(serde_json::from_reader(BufReader::new(File::open(path)?))?)
     }
 }
 
@@ -63,11 +142,22 @@ pub struct Config {
     pub github: github::Config,
     #[serde(default = "cherries_per_check_default")]
     pub cherries_per_check: usize,
-    pub data_dir: PathBuf,
+    #[serde(default = "data_path_default")]
+    pub data_path: PathBuf,
+    #[serde(default = "credentials_path_default")]
+    credentials: PathBuf,
 }
 
 fn cherries_per_check_default() -> usize {
     1
+}
+
+fn credentials_path_default() -> PathBuf {
+    "credentials.toml".into()
+}
+
+fn data_path_default() -> PathBuf {
+    "/var/lib/cherries-4-prs".into()
 }
 
 impl Config {

@@ -2,7 +2,7 @@
 name = "cherries-4-prs"
 version = "1.0.0"
 authors = ["Rebecca Turner <rturner@starry.com>"]
-edition = "2018"
+edition = "2021"
 description = "u approve my PRs, i give u cherries"
 readme = "README.md"
 # repository = "https://github.com/9999years/rust-cli-template"

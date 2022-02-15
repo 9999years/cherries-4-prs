@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 
-use std::{collections::HashMap, convert::TryInto, fs::read_to_string};
+use std::{collections::HashMap, convert::TryInto, fs::read_to_string, path::PathBuf};
 
 use color_eyre::eyre::{self, WrapErr};
 use secrecy::SecretString;
@@ -17,65 +17,10 @@ pub async fn main() -> eyre::Result<()> {
     install_tracing(&args.tracing_filter);
     color_eyre::install()?;
 
-    let creds: Credentials = toml::de::from_str(&read_to_string("xxx_creds.toml")?)?;
-    let cfg: Config = toml::de::from_str(&read_to_string("xxx_config.toml")?)?;
-    let users: Vec<bonusly::User> =
-        serde_json::from_str(&read_to_string("xxx_bonusly_users.json")?)?;
+    let prg = Program::from_config_path(&args.config);
 
-    let _bonusly = bonusly::Client::from_token(creds.bonusly);
+    prg.xxx_reviews()?;
 
-    let github = octocrab::Octocrab::builder()
-        .personal_token(creds.github)
-        .build()?;
-
-    let members: Vec<github::User> = github
-        .get(format!("orgs/{}/members", cfg.github.org), None::<&()>)
-        .await?;
-
-    // xxx_reviews(cfg, github, users)?.await;
-
-    // - correlate bonusly users <-> github users
-    // - watch for changes over time
-
-    Ok(())
-}
-
-async fn xxx_reviews(
-    cfg: Config,
-    github: octocrab::Octocrab,
-    users: Vec<bonusly::User>,
-) -> eyre::Result<()> {
-    let updated_prs = cfg
-        .github
-        .prs_since(&github, "2021-08-20T00:00:00-04:00")
-        .await?;
-    for pr in updated_prs.items {
-        let (org, repo) = github::org_repo(&pr)
-            .ok_or_else(|| eyre::eyre!("Couldn't get org/repo from url {}", &pr.repository_url))?;
-
-        let reviews = github
-                .pulls(org, repo)
-                .list_reviews(pr.number.try_into().expect("why did this api use different types for pr numbers and pr ids and then use the wrong one"))
-                .await?;
-
-        for review in reviews.items {
-            if let Some(octocrab::models::pulls::ReviewState::Approved) = review.state {
-                let user = github::User::from_login(&github, &review.user.login).await?;
-                let email = cfg.find_bonusly_email(&users, &user);
-                println!(
-                    "pr {} to {}/{} approved by {}{}",
-                    pr.number,
-                    org,
-                    repo,
-                    review.user.login,
-                    match email {
-                        Some(email) => format!(" ({})", email),
-                        None => "".to_owned(),
-                    }
-                );
-            }
-        }
-    }
     Ok(())
 }
 
@@ -113,4 +58,6 @@ struct Opt {
     /// See: https://docs.rs/tracing-subscriber/latest/tracing_subscriber/struct.EnvFilter.html
     #[structopt(long, default_value = "info")]
     tracing_filter: String,
+    /// Configuration path (TOML).
+    config: PathBuf,
 }

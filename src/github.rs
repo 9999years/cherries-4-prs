@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use octocrab::{models::issues::Issue, Octocrab, Page};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct User {
     pub id: u64,
     pub login: String,
@@ -29,13 +30,15 @@ impl Config {
     pub async fn prs_since(
         &self,
         github: &Octocrab,
-        datetime: &str,
+        datetime: &DateTime<Utc>,
     ) -> Result<Page<Issue>, octocrab::Error> {
         github
             .search()
             .issues_and_pull_requests(&format!(
                 "is:pr author:{} review:approved org:{} updated:>={}",
-                self.user, self.org, datetime
+                self.user,
+                self.org,
+                datetime.to_rfc3339()
             ))
             .send()
             .await
