@@ -1,10 +1,8 @@
-#![allow(unused_imports)]
-
+use std::fmt::Debug;
 use std::{
     collections::HashSet,
     fs::{self, File},
-    io::BufReader,
-    os::unix::prelude::AsRawFd,
+    io::{BufReader, BufWriter},
     path::{Path, PathBuf},
 };
 
@@ -25,15 +23,30 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn from_config_path(config_path: impl AsRef<Path>) -> eyre::Result<Self> {
-        let config: Config = toml::de::from_str(&fs::read_to_string(&config_path)?)?;
-        let credentials_path = config_path
-            .as_ref()
+    #[instrument]
+    pub async fn from_config_path(config_path: impl AsRef<Path> + Debug) -> eyre::Result<Self> {
+        let config_path = config_path.as_ref();
+        info!(?config_path, "Reading configuration");
+        let config: Config = toml::de::from_str(
+            &fs::read_to_string(&config_path)
+                .with_context(|| format!("Failed to read config from {config_path:?}"))?,
+        )?;
+        let config_parent = config_path
             .parent()
-            .ok_or_else(|| eyre::eyre!("Path has no parent: {config_path:?}"))?
-            .join(&config.credentials);
-        let credentials: Credentials = toml::de::from_str(&fs::read_to_string(credentials_path)?)?;
-        let state = State::from_data_path(&config.data_path)?;
+            .ok_or_else(|| eyre::eyre!("Path has no parent: {config_path:?}"))?;
+
+        let credentials_path = config_parent.join(&config.credentials_path);
+        info!(?credentials_path, "Reading credentials");
+        let credentials: Credentials =
+            toml::de::from_str(&fs::read_to_string(&credentials_path).with_context(|| {
+                format!("Failed to read credentials from {credentials_path:?}")
+            })?)?;
+
+        let state_path = &config_parent.join(&config.data_path);
+        info!(?state_path, "Reading state");
+        let state = State::from_data_path(state_path, &credentials, &config)
+            .await
+            .with_context(|| format!("Failed to read state from {state_path:?}"))?;
         Ok(Self {
             config,
             credentials,
@@ -125,6 +138,7 @@ pub struct State {
 }
 
 impl State {
+    #[instrument(skip_all)]
     pub async fn new(credentials: &Credentials, config: &Config) -> eyre::Result<Self> {
         let mut ret = Self {
             cutoff: Utc::now(),
@@ -138,6 +152,7 @@ impl State {
         Ok(ret)
     }
 
+    #[instrument(skip_all)]
     pub async fn update(&mut self, credentials: &Credentials, config: &Config) -> eyre::Result<()> {
         self.my_bonusly_email = credentials.bonusly.my_email().await?;
         self.hashtags = credentials.bonusly.hashtags().await?;
@@ -149,12 +164,26 @@ impl State {
         Ok(())
     }
 
-    pub fn from_data_path(path: impl AsRef<Path>) -> eyre::Result<Self> {
-        if let Some(parent) = path.as_ref().parent() {
+    #[instrument(skip(credentials, config))]
+    pub async fn from_data_path(
+        data_path: &Path,
+        credentials: &Credentials,
+        config: &Config,
+    ) -> eyre::Result<Self> {
+        if let Some(parent) = data_path.parent() {
+            info!(?parent, "Ensuring state parent dir exists");
             fs::create_dir_all(parent)?;
         }
-        // TODO: Create a new default state file if path isnt found
-        Ok(serde_json::from_reader(BufReader::new(File::open(path)?))?)
+        if !data_path.exists() {
+            info!(?data_path, "State file not found, creating default");
+            let new = Self::new(credentials, config).await?;
+            serde_json::to_writer(BufWriter::new(File::create(data_path)?), &new)?;
+            Ok(new)
+        } else {
+            Ok(serde_json::from_reader(BufReader::new(File::open(
+                data_path,
+            )?))?)
+        }
     }
 }
 
@@ -166,7 +195,7 @@ pub struct Config {
     #[serde(default = "data_path_default")]
     pub data_path: PathBuf,
     #[serde(default = "credentials_path_default")]
-    credentials: PathBuf,
+    credentials_path: PathBuf,
 }
 
 fn cherries_per_check_default() -> usize {
@@ -200,8 +229,10 @@ impl Config {
         }
         // Otherwise, use full names / display names.
         for user in users {
-            if user.full_name == find.name || user.display_name == find.name {
-                return Some(user.email.clone());
+            if let Some(name) = &find.name {
+                if &user.full_name == name || &user.display_name == name {
+                    return Some(user.email.clone());
+                }
             }
         }
         None

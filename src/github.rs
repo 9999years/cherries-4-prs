@@ -9,7 +9,7 @@ pub struct User {
     pub id: u64,
     pub login: String,
     pub email: Option<String>,
-    pub name: String,
+    pub name: Option<String>,
 }
 
 impl User {

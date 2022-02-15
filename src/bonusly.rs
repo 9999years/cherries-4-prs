@@ -29,14 +29,30 @@ impl Client {
     }
 
     pub async fn list_users(&self) -> eyre::Result<Vec<User>> {
-        self.request(reqwest::Method::GET, "/users")
-            .query(&[("limit", "100")])
-            .send()
-            .await?
-            .json::<BonuslyResult<Vec<User>>>()
-            .await?
-            .into_result()
-            .map_err(Report::msg)
+        const LIMIT: usize = 100;
+        let mut skip: usize = 0;
+        // Based roughly on Starry's size at time of writing.
+        let mut ret = Vec::with_capacity(1000);
+
+        loop {
+            let mut users = self
+                .request(reqwest::Method::GET, "/users")
+                .query(&[("limit", LIMIT.to_string()), ("skip", skip.to_string())])
+                .send()
+                .await?
+                .json::<BonuslyResult<Vec<User>>>()
+                .await?
+                .into_result()
+                .map_err(Report::msg)?;
+            let done = users.len() < LIMIT;
+            skip += users.len();
+            ret.append(&mut users);
+            if done {
+                break;
+            }
+        }
+
+        Ok(ret)
     }
 
     pub async fn my_email(&self) -> eyre::Result<String> {

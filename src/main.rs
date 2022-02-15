@@ -17,9 +17,9 @@ pub async fn main() -> eyre::Result<()> {
     install_tracing(&args.tracing_filter);
     color_eyre::install()?;
 
-    let prg = Program::from_config_path(&args.config);
+    let prg = Program::from_config_path(&args.config).await?;
 
-    prg.xxx_reviews()?;
+    prg.xxx_reviews().await?;
 
     Ok(())
 }
@@ -28,14 +28,14 @@ fn install_tracing(filter_directives: &str) {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::{
-        fmt::{self, format::FmtSpan, time::ChronoLocal},
+        fmt::{self, format::FmtSpan, time::UtcTime},
         EnvFilter,
     };
 
     let fmt_layer = fmt::layer()
         .with_target(false)
         .with_span_events(FmtSpan::ACTIVE)
-        .with_timer(ChronoLocal::rfc3339());
+        .without_time();
     let filter_layer = EnvFilter::try_new(filter_directives)
         .or_else(|_| EnvFilter::try_from_default_env())
         .or_else(|_| EnvFilter::try_new("info"))
