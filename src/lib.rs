@@ -9,13 +9,19 @@ use std::{
 
 use chrono::prelude::*;
 use color_eyre::eyre::{self, WrapErr};
+use octocrab::models::ReviewId;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{event, info, instrument, span, warn, Level};
+use tracing_subscriber::registry::SpanData;
 
 pub mod api;
 pub mod bonusly;
+mod config;
+mod credentials;
 pub mod github;
+pub use config::*;
+pub use credentials::*;
 
 pub struct Program {
     credentials: Credentials,
@@ -23,15 +29,22 @@ pub struct Program {
     state: State,
 }
 
+// no way this can work right? XXX FIXME TODO
+impl Drop for Program {
+    fn drop(&mut self) {
+        self.state.write_to_path(&self.config.state_path());
+    }
+}
+
 impl Program {
     #[instrument]
-    pub async fn from_config_path(config_path: impl AsRef<Path> + Debug) -> eyre::Result<Self> {
-        let config_path = config_path.as_ref();
+    pub async fn from_config_path(config_path: PathBuf) -> eyre::Result<Self> {
         info!(?config_path, "Reading configuration");
-        let config: Config = toml::de::from_str(
+        let mut config: Config = toml::de::from_str(
             &fs::read_to_string(&config_path)
                 .with_context(|| format!("Failed to read config from {config_path:?}"))?,
         )?;
+        config.path = config_path.clone();
         let config_parent = config_path
             .parent()
             .ok_or_else(|| eyre::eyre!("Path has no parent: {config_path:?}"))?;
@@ -103,60 +116,67 @@ impl Program {
         Ok(ret)
     }
 
-    pub async fn xxx_reviews(&self) -> eyre::Result<Vec<bonusly::Bonus>> {
+    pub async fn reviews(&self) -> eyre::Result<Vec<ReviewStatus>> {
         let mut rng = rand::thread_rng();
         let mut ret = Vec::new();
 
         // TODO:
         //  - figure out tracking which prs have been replied to or not
         //  - reserve prs with no email on a queue for manual attention later
+        //  - think about error handling, particularly re: the state file
+        //  - investigate cool parallel shit here with rayon
 
-        for (pr, reviews) in self.new_approved_reviews().await?.iter() {
+        for (pr, reviews) in self.new_approved_reviews().await? {
             for review in reviews {
                 let user =
                     github::User::from_login(&self.credentials.github, &review.user.login).await?;
                 let email = self
                     .config
                     .find_bonusly_email(&self.state.bonusly_users, &user);
-                println!(
-                    "pr {} to {}/{} approved by {}{}",
-                    pr.number,
-                    pr.org,
-                    pr.repo,
-                    review.user.login,
-                    match &email {
-                        Some(email) => format!(" ({})", email),
-                        None => "".to_owned(),
-                    }
-                );
 
-                if let Some(email) = email {
-                    ret.push(bonusly::Bonus {
+                ret.push(match email {
+                    Some(email) => ReviewStatus::Ok(bonusly::Bonus {
                         giver_email: self.state.my_bonusly_email.clone(),
                         receiver_email: email,
                         amount: self.config.cherries_per_check,
                         hashtag: self.state.hashtags[rng.gen_range(0..self.state.hashtags.len())]
                             .clone(),
                         reason: format!("thanks for approving my PR! {}", review.html_url),
-                    });
-                }
+                    }),
+                    None => ReviewStatus::MissingEmail({
+                        MissingEmail {
+                            org: pr.org.clone(),
+                            repo: pr.repo.clone(),
+                            pr_number: pr.number,
+                            reviewer: review.user.login,
+                            id: review.id,
+                        }
+                    }),
+                });
             }
         }
         Ok(ret)
     }
-}
 
-#[derive(Deserialize)]
-#[serde(try_from = "api::Credentials")]
-pub struct Credentials {
-    pub bonusly: bonusly::Client,
-    pub github: octocrab::Octocrab,
+    pub async fn reply(&mut self, review: ReviewStatus) -> eyre::Result<()> {
+        match review {
+            ReviewStatus::Ok(bonus) => {
+                self.credentials.bonusly.send_bonus(&bonus).await?;
+            }
+            ReviewStatus::MissingEmail(missing_email) => {
+                self.state.missing_email.insert(missing_email);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Program state. Deserialized from data dir.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct State {
     replied_prs: HashSet<octocrab::models::ReviewId>,
+    missing_email: HashSet<MissingEmail>,
     /// "Don't look for PRs before this datetime"
     cutoff: DateTime<Utc>,
     bonusly_users: Vec<bonusly::User>,
@@ -175,6 +195,7 @@ impl State {
             github_members: Default::default(),
             my_bonusly_email: Default::default(),
             hashtags: Default::default(),
+            missing_email: Default::default(),
         };
         ret.update(credentials, config).await?;
         Ok(ret)
@@ -213,56 +234,24 @@ impl State {
             )?))?)
         }
     }
-}
 
-#[derive(Deserialize, Clone)]
-pub struct Config {
-    pub github: github::Config,
-    #[serde(default = "cherries_per_check_default")]
-    pub cherries_per_check: usize,
-    #[serde(default = "data_path_default")]
-    pub data_path: PathBuf,
-    #[serde(default = "credentials_path_default")]
-    credentials_path: PathBuf,
-}
-
-fn cherries_per_check_default() -> usize {
-    1
-}
-
-fn credentials_path_default() -> PathBuf {
-    "credentials.toml".into()
-}
-
-fn data_path_default() -> PathBuf {
-    "/var/lib/cherries-4-prs".into()
-}
-
-impl Config {
-    pub fn find_bonusly_email(
-        &self,
-        users: &[bonusly::User],
-        find: &github::User,
-    ) -> Option<String> {
-        // First check for overrides.
-        if let Some(email) = self.github.emails.get(&find.login) {
-            return Some(email.clone());
-        }
-
-        // If find's GitHub profile lists an `@starry.com` email, use it.
-        if let Some(email) = &find.email {
-            if email.ends_with("@starry.com") {
-                return Some(email.clone());
-            }
-        }
-        // Otherwise, use full names / display names.
-        for user in users {
-            if let Some(name) = &find.name {
-                if &user.full_name == name || &user.display_name == name {
-                    return Some(user.email.clone());
-                }
-            }
-        }
-        None
+    pub async fn write_to_path(&self, data_path: &Path) -> eyre::Result<()> {
+        serde_json::to_writer_pretty(BufWriter::new(File::create(data_path)?), &self)?;
+        Ok(())
     }
+}
+
+pub enum ReviewStatus {
+    Ok(bonusly::Bonus),
+    MissingEmail(MissingEmail),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct MissingEmail {
+    org: String,
+    repo: String,
+    pr_number: i64,
+    // GitHub username
+    reviewer: String,
+    id: ReviewId,
 }
