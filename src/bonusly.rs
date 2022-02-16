@@ -31,7 +31,7 @@ impl Client {
             .header("HTTP_APPLICATION_NAME", "cherries-4-prs")
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     pub async fn list_users(&self) -> eyre::Result<Vec<User>> {
         const LIMIT: usize = 100;
         let mut skip: usize = 0;

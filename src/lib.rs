@@ -13,7 +13,7 @@ use color_eyre::eyre::{self, WrapErr};
 use octocrab::models::ReviewId;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, instrument};
+use tracing::{debug, error, info, instrument};
 
 pub mod api;
 pub mod bonusly;
@@ -26,11 +26,11 @@ pub use credentials::*;
 pub struct Program {
     pub credentials: Credentials,
     pub config: Config,
-    pub state: State,
+    state: State,
 }
 
 impl Program {
-    #[instrument]
+    #[instrument(level = "debug")]
     pub async fn from_config_path(config_path: PathBuf) -> eyre::Result<Self> {
         info!(?config_path, "Reading configuration");
         let config = Config::from_path(config_path.clone())
@@ -44,7 +44,7 @@ impl Program {
             })?)?;
 
         let state_path = &config.state_path;
-        info!(?state_path, "Reading state");
+        info!(?state_path, "Reading program state");
         let state = State::from_data_path(state_path, &credentials, &config)
             .await
             .with_context(|| format!("Failed to read state from {state_path:?}"))?;
@@ -55,14 +55,13 @@ impl Program {
         })
     }
 
-    #[instrument(skip_all)]
-    pub async fn write_state(&self) -> eyre::Result<()> {
+    async fn write_state(&self) -> eyre::Result<()> {
         self.state.write_to_path(&self.config.state_path).await?;
         Ok(())
     }
 
-    #[instrument(skip_all)]
-    pub async fn new_approved_reviews(
+    #[instrument(skip_all, level = "debug")]
+    async fn new_approved_reviews(
         &self,
     ) -> eyre::Result<HashMap<github::PullRequest, Vec<octocrab::models::pulls::Review>>> {
         let mut ret = HashMap::new();
@@ -102,13 +101,13 @@ impl Program {
                     })
                 })
                 .inspect(|review| {
-                    info!(
+                    debug!(
                         ?org,
                         ?repo,
                         pr_number = pr.number,
                         reviewer = %review.user.login,
                         review_id = %review.id,
-                        "Found approved review"
+                        "Found approved/unreplied review"
                     );
                 })
                 .collect::<Vec<_>>();
@@ -140,14 +139,6 @@ impl Program {
                     None::<&()>,
                 )
                 .await?;
-            info!(
-                ?org,
-                ?repo,
-                pr_number = pr.number,
-                reviewer = %review.user.login,
-                review_id = %review.id,
-                "Found review missing email"
-            );
             ret.entry(github::PullRequest {
                 org: org.clone(),
                 repo: repo.clone(),
@@ -160,8 +151,8 @@ impl Program {
         Ok(ret)
     }
 
-    #[instrument(skip_all)]
-    pub async fn reviews(&mut self) -> eyre::Result<Vec<ReviewStatus>> {
+    #[instrument(skip_all, level = "debug")]
+    async fn reviews(&mut self) -> eyre::Result<Vec<ReviewStatus>> {
         let mut rng = rand::thread_rng();
         let mut ret = Vec::new();
 
@@ -218,8 +209,8 @@ impl Program {
         Ok(ret)
     }
 
-    #[instrument(skip(self))]
-    pub async fn reply(&mut self, review: ReviewStatus) -> eyre::Result<()> {
+    #[instrument(skip(self), level = "debug")]
+    async fn reply(&mut self, review: ReviewStatus) -> eyre::Result<()> {
         match review {
             ReviewStatus::Ok(missing_email, bonus) => {
                 let result = self.credentials.bonusly.send_bonus(&bonus).await;
@@ -237,6 +228,10 @@ impl Program {
                 }
             }
             ReviewStatus::MissingEmail(missing_email) => {
+                info!(
+                    user = %missing_email.reviewer,
+                    "No email found for GitHub reviewer"
+                );
                 self.state.non_replied_prs.insert(missing_email);
             }
         }
@@ -244,10 +239,12 @@ impl Program {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     pub async fn reply_all_and_wait(&mut self) -> eyre::Result<()> {
         let reviews = self.reviews().await?;
-        info!(?reviews, "Sending cherries for reviews");
+        if !reviews.is_empty() {
+            info!(?reviews, "Sending cherries for reviews");
+        }
         let mut errors = Vec::with_capacity(reviews.len());
         for review in reviews {
             if let Err(err) = self.reply(review).await {
@@ -256,7 +253,7 @@ impl Program {
             }
 
             let duration = Duration::from_secs(10);
-            info!("Sleeping {:?} before sending next bonus", duration);
+            debug!("Sleeping {:?} before sending next bonus", duration);
             tokio::time::sleep(duration).await;
         }
 
@@ -268,7 +265,7 @@ impl Program {
         self.write_state().await?;
         result?;
 
-        info!("Sleeping for {:?}", self.config.pr_check_interval);
+        debug!("Sleeping for {:?}", self.config.pr_check_interval);
         tokio::time::sleep(self.config.pr_check_interval).await;
 
         if errors.is_empty() {
@@ -300,7 +297,7 @@ pub struct State {
 }
 
 impl State {
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     pub async fn new(credentials: &Credentials, config: &Config) -> eyre::Result<Self> {
         let mut ret = Self {
             cutoff: Utc::now() - chrono::Duration::from_std(config.pr_check_interval).unwrap(),
@@ -315,7 +312,7 @@ impl State {
         Ok(ret)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     pub async fn update(
         &mut self,
         credentials: &Credentials,
@@ -327,7 +324,7 @@ impl State {
         Ok(())
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     pub async fn maybe_update(
         &mut self,
         credentials: &Credentials,
@@ -340,7 +337,7 @@ impl State {
         Ok(())
     }
 
-    #[instrument(skip(credentials, config))]
+    #[instrument(skip(credentials, config), level = "debug")]
     pub async fn from_data_path(
         data_path: &Path,
         credentials: &Credentials,
@@ -362,12 +359,13 @@ impl State {
         }
     }
 
+    #[instrument(skip(self), level = "debug")]
     pub async fn write_to_path(&self, data_path: &Path) -> eyre::Result<()> {
         serde_json::to_writer_pretty(BufWriter::new(File::create(data_path)?), &self)?;
         Ok(())
     }
 
-    #[instrument(skip(self, credentials))]
+    #[instrument(skip(self, credentials), level = "debug")]
     pub async fn github_user(
         &mut self,
         login: String,

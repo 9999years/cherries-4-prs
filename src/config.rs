@@ -28,7 +28,7 @@ pub struct Config {
 }
 
 impl Config {
-    #[instrument]
+    #[instrument(level = "debug")]
     pub fn from_path(path: PathBuf) -> eyre::Result<Self> {
         let path = path
             .canonicalize()

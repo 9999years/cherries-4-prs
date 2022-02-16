@@ -1,16 +1,10 @@
-#![allow(unused_imports)]
+use std::path::PathBuf;
 
-use std::{collections::HashMap, convert::TryInto, fs::read_to_string, path::PathBuf};
-
-use color_eyre::eyre::{self, WrapErr};
-use secrecy::SecretString;
-use serde::Deserialize;
+use color_eyre::eyre;
 use structopt::StructOpt;
-use tracing::{event, info, instrument, span, warn, Level};
 
 use cherries_4_prs::*;
 
-#[instrument]
 #[tokio::main]
 pub async fn main() -> eyre::Result<()> {
     let args = Opt::from_args();
