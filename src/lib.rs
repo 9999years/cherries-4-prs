@@ -10,7 +10,6 @@ use std::{
 
 use chrono::prelude::*;
 use color_eyre::eyre::{self, WrapErr};
-use octocrab::models::ReviewId;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info, instrument};
@@ -22,6 +21,12 @@ mod credentials;
 pub mod github;
 pub use config::*;
 pub use credentials::*;
+
+#[derive(Debug)]
+pub enum ReviewStatus {
+    Ok(github::NonRepliedReview, bonusly::Bonus),
+    MissingEmail(github::NonRepliedReview),
+}
 
 pub struct Program {
     pub credentials: Credentials,
@@ -63,7 +68,7 @@ impl Program {
     #[instrument(skip_all, level = "debug")]
     async fn new_approved_reviews(
         &self,
-    ) -> eyre::Result<HashMap<github::PullRequest, Vec<octocrab::models::pulls::Review>>> {
+    ) -> eyre::Result<HashMap<github::PullRequest, Vec<github::Review>>> {
         let mut ret = HashMap::new();
         let updated_prs = self
             .config
@@ -75,7 +80,7 @@ impl Program {
                 eyre::eyre!("Couldn't parse org/repo from url {}", &pr.repository_url)
             })?;
 
-            let reviews = self
+            let reviews: github::Page<github::Review> = self
                 .credentials
                 .github
                 .pulls(org, repo)
@@ -88,17 +93,15 @@ impl Program {
                 .items
                 .into_iter()
                 .filter(|review| {
-                    matches!(
-                        review.state,
-                        Some(octocrab::models::pulls::ReviewState::Approved)
-                    ) && !self.state.replied_prs.contains(&RepliedReview {
-                        pr: github::PullRequest {
-                            org: org.to_owned(),
-                            repo: repo.to_owned(),
-                            number: pr.number,
-                        },
-                        reviewer: review.user.login.clone(),
-                    })
+                    matches!(review.state, Some(github::ReviewState::Approved))
+                        && !self.state.replied_prs.contains(&github::RepliedReview {
+                            pr: github::PullRequest {
+                                org: org.to_owned(),
+                                repo: repo.to_owned(),
+                                number: pr.number,
+                            },
+                            reviewer: review.user.login.clone(),
+                        })
                 })
                 .inspect(|review| {
                     debug!(
@@ -124,14 +127,14 @@ impl Program {
             }
         }
 
-        for MissingEmail {
+        for github::NonRepliedReview {
             pr,
             reviewer: _reviewer,
             id,
         } in &self.state.non_replied_prs
         {
             let github::PullRequest { org, repo, number } = pr;
-            let review: octocrab::models::pulls::Review = self
+            let review: github::Review = self
                 .credentials
                 .github
                 .get(
@@ -171,7 +174,7 @@ impl Program {
                     .config
                     .find_bonusly_email(&self.state.bonusly_users, &user);
 
-                let missing_email = MissingEmail {
+                let missing_email = github::NonRepliedReview {
                     pr: github::PullRequest {
                         org: pr.org.clone(),
                         repo: pr.repo.clone(),
@@ -283,9 +286,9 @@ pub struct State {
     last_update: DateTime<Utc>,
     /// PR-reviewer combos we've already replied to; don't send cherries more
     /// than once per reviewer per PR.
-    replied_prs: HashSet<RepliedReview>,
+    replied_prs: HashSet<github::RepliedReview>,
     /// Reviews we haven't replied to; missing emails or API errors.
-    non_replied_prs: HashSet<MissingEmail>,
+    non_replied_prs: HashSet<github::NonRepliedReview>,
     /// "Don't look for PRs before this datetime"
     cutoff: DateTime<Utc>,
     /// All bonusly users, for correlation with GitHub users.
@@ -380,36 +383,6 @@ impl State {
                 // TODO there has got to be a better way to do this
                 Ok(self.github_members.get(&login).unwrap().clone())
             }
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum ReviewStatus {
-    Ok(MissingEmail, bonusly::Bonus),
-    MissingEmail(MissingEmail),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct MissingEmail {
-    pr: github::PullRequest,
-    // GitHub username
-    reviewer: String,
-    id: ReviewId,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct RepliedReview {
-    pr: github::PullRequest,
-    // GitHub username
-    reviewer: String,
-}
-
-impl From<MissingEmail> for RepliedReview {
-    fn from(missing_email: MissingEmail) -> Self {
-        Self {
-            pr: missing_email.pr,
-            reviewer: missing_email.reviewer,
         }
     }
 }

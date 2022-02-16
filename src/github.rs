@@ -1,8 +1,14 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use octocrab::{models::issues::Issue, Octocrab, Page};
+use octocrab::Octocrab;
 use serde::{Deserialize, Serialize};
+
+pub use octocrab::models::issues::Issue;
+pub use octocrab::models::pulls::Review;
+pub use octocrab::models::pulls::ReviewState;
+pub use octocrab::models::ReviewId;
+pub use octocrab::Page;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct User {
@@ -57,4 +63,28 @@ pub struct PullRequest {
     pub org: String,
     pub repo: String,
     pub number: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct NonRepliedReview {
+    pub pr: PullRequest,
+    // GitHub username
+    pub reviewer: String,
+    pub id: ReviewId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct RepliedReview {
+    pub pr: PullRequest,
+    // GitHub username
+    pub reviewer: String,
+}
+
+impl From<NonRepliedReview> for RepliedReview {
+    fn from(missing_email: NonRepliedReview) -> Self {
+        Self {
+            pr: missing_email.pr,
+            reviewer: missing_email.reviewer,
+        }
+    }
 }
