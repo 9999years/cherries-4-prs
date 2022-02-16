@@ -17,9 +17,15 @@ pub async fn main() -> eyre::Result<()> {
     install_tracing(&args.tracing_filter);
     color_eyre::install()?;
 
-    let prg = Program::from_config_path(&args.config).await?;
+    let mut prg = Program::from_config_path(args.config.clone()).await?;
 
-    prg.xxx_reviews().await?;
+    loop {
+        let reviews = prg.reviews().await?;
+
+        prg.write_state().await?;
+
+        tokio::time::sleep(prg.config.pr_check_interval).await;
+    }
 
     Ok(())
 }

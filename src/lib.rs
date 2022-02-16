@@ -13,7 +13,6 @@ use octocrab::models::ReviewId;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use tracing::{event, info, instrument, span, warn, Level};
-use tracing_subscriber::registry::SpanData;
 
 pub mod api;
 pub mod bonusly;
@@ -24,39 +23,26 @@ pub use config::*;
 pub use credentials::*;
 
 pub struct Program {
-    credentials: Credentials,
-    config: Config,
-    state: State,
-}
-
-// no way this can work right? XXX FIXME TODO
-impl Drop for Program {
-    fn drop(&mut self) {
-        self.state.write_to_path(&self.config.state_path());
-    }
+    pub credentials: Credentials,
+    pub config: Config,
+    pub state: State,
 }
 
 impl Program {
     #[instrument]
     pub async fn from_config_path(config_path: PathBuf) -> eyre::Result<Self> {
         info!(?config_path, "Reading configuration");
-        let mut config: Config = toml::de::from_str(
-            &fs::read_to_string(&config_path)
-                .with_context(|| format!("Failed to read config from {config_path:?}"))?,
-        )?;
-        config.path = config_path.clone();
-        let config_parent = config_path
-            .parent()
-            .ok_or_else(|| eyre::eyre!("Path has no parent: {config_path:?}"))?;
+        let config = Config::from_path(config_path.clone())
+            .with_context(|| format!("Failed to read config from {config_path:?}"))?;
 
-        let credentials_path = config_parent.join(&config.credentials_path);
+        let credentials_path = &config.credentials_path;
         info!(?credentials_path, "Reading credentials");
         let credentials: Credentials =
-            toml::de::from_str(&fs::read_to_string(&credentials_path).with_context(|| {
+            toml::de::from_str(&fs::read_to_string(credentials_path).with_context(|| {
                 format!("Failed to read credentials from {credentials_path:?}")
             })?)?;
 
-        let state_path = &config_parent.join(&config.data_path);
+        let state_path = &config.state_path;
         info!(?state_path, "Reading state");
         let state = State::from_data_path(state_path, &credentials, &config)
             .await
@@ -66,6 +52,11 @@ impl Program {
             credentials,
             state,
         })
+    }
+
+    pub async fn write_state(&self) -> eyre::Result<()> {
+        self.state.write_to_path(&self.config.state_path).await?;
+        Ok(())
     }
 
     pub async fn new_approved_reviews(
@@ -98,7 +89,12 @@ impl Program {
                     matches!(
                         review.state,
                         Some(octocrab::models::pulls::ReviewState::Approved)
-                    ) && !self.state.replied_prs.contains(&review.id)
+                    ) && !self.state.replied_prs.contains(&RepliedReview {
+                        org: org.to_owned(),
+                        repo: repo.to_owned(),
+                        pr_number: pr.number,
+                        reviewer: review.user.login.clone(),
+                    })
                 })
                 .collect::<Vec<_>>();
 
@@ -113,6 +109,12 @@ impl Program {
                 );
             }
         }
+
+        // Now, get any missing email reviews we've found emails for.
+        for review in &self.state.missing_email {
+            // TODO
+        }
+
         Ok(ret)
     }
 
@@ -122,12 +124,12 @@ impl Program {
 
         // TODO:
         //  - figure out tracking which prs have been replied to or not
-        //  - reserve prs with no email on a queue for manual attention later
         //  - think about error handling, particularly re: the state file
         //  - investigate cool parallel shit here with rayon
 
         for (pr, reviews) in self.new_approved_reviews().await? {
             for review in reviews {
+                // TODO cache these in state too
                 let user =
                     github::User::from_login(&self.credentials.github, &review.user.login).await?;
                 let email = self
@@ -161,7 +163,9 @@ impl Program {
     pub async fn reply(&mut self, review: ReviewStatus) -> eyre::Result<()> {
         match review {
             ReviewStatus::Ok(bonus) => {
-                self.credentials.bonusly.send_bonus(&bonus).await?;
+                let result = self.credentials.bonusly.send_bonus(&bonus).await;
+                tokio::time::sleep(self.config.send_bonus_interval).await;
+                result?;
             }
             ReviewStatus::MissingEmail(missing_email) => {
                 self.state.missing_email.insert(missing_email);
@@ -170,12 +174,25 @@ impl Program {
 
         Ok(())
     }
+
+    pub async fn reply_all_and_wait(&mut self) -> eyre::Result<()> {
+        let reviews = self.reviews().await?;
+        let mut errors = Vec::with_capacity(reviews.len());
+        for review in reviews {
+            if let Err(err) = self.reply(review).await {
+                errors.push(err);
+            }
+        }
+        tokio::time::sleep(self.config.pr_check_interval).await;
+        Ok(())
+    }
 }
 
 /// Program state. Deserialized from data dir.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct State {
-    replied_prs: HashSet<octocrab::models::ReviewId>,
+    last_update: DateTime<Utc>,
+    replied_prs: HashSet<RepliedReview>,
     missing_email: HashSet<MissingEmail>,
     /// "Don't look for PRs before this datetime"
     cutoff: DateTime<Utc>,
@@ -190,6 +207,7 @@ impl State {
     pub async fn new(credentials: &Credentials, config: &Config) -> eyre::Result<Self> {
         let mut ret = Self {
             cutoff: Utc::now(),
+            last_update: Utc::now(),
             replied_prs: Default::default(),
             bonusly_users: Default::default(),
             github_members: Default::default(),
@@ -206,10 +224,12 @@ impl State {
         self.my_bonusly_email = credentials.bonusly.my_email().await?;
         self.hashtags = credentials.bonusly.hashtags().await?;
         self.bonusly_users = credentials.bonusly.list_users().await?;
+        // TODO: pagination here too
         self.github_members = credentials
             .github
             .get(format!("orgs/{}/members", config.github.org), None::<&()>)
             .await?;
+        self.last_update = Utc::now();
         Ok(())
     }
 
@@ -241,6 +261,7 @@ impl State {
     }
 }
 
+#[derive(Debug)]
 pub enum ReviewStatus {
     Ok(bonusly::Bonus),
     MissingEmail(MissingEmail),
@@ -254,4 +275,13 @@ pub struct MissingEmail {
     // GitHub username
     reviewer: String,
     id: ReviewId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct RepliedReview {
+    org: String,
+    repo: String,
+    pr_number: i64,
+    // GitHub username
+    reviewer: String,
 }

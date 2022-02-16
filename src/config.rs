@@ -1,43 +1,58 @@
+use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
-use serde::Deserialize;
+use color_eyre::eyre;
+use color_eyre::eyre::WrapErr;
+use tracing::info;
+use tracing::instrument;
 
+use crate::api;
 use crate::bonusly;
 use crate::github;
 
-#[derive(Deserialize, Clone)]
+const SECONDS_PER_MINUTE: u64 = 60;
+
+#[derive(Clone)]
 pub struct Config {
-    // TODO: UH OH serde
-    #[serde(default = "config_path_default")]
     pub path: PathBuf,
-
     pub github: github::Config,
-    #[serde(default = "cherries_per_check_default")]
     pub cherries_per_check: usize,
-    #[serde(default = "data_path_default")]
-    pub data_path: PathBuf,
-    #[serde(default = "credentials_path_default")]
+    pub state_path: PathBuf,
     pub credentials_path: PathBuf,
-}
-
-fn config_path_default() -> PathBuf {
-    // uh oh
-    "".into()
-}
-
-fn cherries_per_check_default() -> usize {
-    1
-}
-
-fn credentials_path_default() -> PathBuf {
-    "credentials.toml".into()
-}
-
-fn data_path_default() -> PathBuf {
-    "/var/lib/cherries-4-prs".into()
+    pub pr_check_interval: Duration,
+    pub state_update_interval: chrono::Duration,
+    pub send_bonus_interval: Duration,
 }
 
 impl Config {
+    #[instrument]
+    pub fn from_path(path: PathBuf) -> eyre::Result<Self> {
+        let path = path
+            .canonicalize()
+            .with_context(|| format!("Failed to canonicalize {path:?}"))?;
+        let config_parent = path
+            .parent()
+            .ok_or_else(|| eyre::eyre!("Path has no parent: {path:?}"))?
+            .to_path_buf();
+        info!(?path, "Reading configuration");
+        let config: api::Config = toml::de::from_str(
+            &fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read config from {path:?}"))?,
+        )?;
+
+        Ok(Self {
+            path,
+            github: config.github,
+            cherries_per_check: config.cherries_per_check,
+            state_path: config_parent.join(config.data_path),
+            credentials_path: config_parent.join(config.credentials_path),
+            pr_check_interval: Duration::from_secs(config.pr_check_minutes * SECONDS_PER_MINUTE),
+            state_update_interval: chrono::Duration::days(config.state_update_days),
+            send_bonus_interval: Duration::from_secs(config.send_bonus_delay_seconds),
+        })
+    }
+
     pub fn find_bonusly_email(
         &self,
         users: &[bonusly::User],
@@ -63,10 +78,5 @@ impl Config {
             }
         }
         None
-    }
-
-    // TODO Probably just store the resolved version
-    pub fn state_path(&self) -> PathBuf {
-        self.path.join(&self.data_path)
     }
 }
