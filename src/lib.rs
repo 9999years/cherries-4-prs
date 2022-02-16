@@ -13,7 +13,7 @@ use color_eyre::eyre::{self, WrapErr};
 use octocrab::models::ReviewId;
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-use tracing::{event, info, instrument, span, warn, Level};
+use tracing::{error, info, instrument};
 
 pub mod api;
 pub mod bonusly;
@@ -197,7 +197,6 @@ impl Program {
                         ret.push(ReviewStatus::Ok(
                             missing_email,
                             bonusly::Bonus {
-                                giver_email: self.state.my_bonusly_email.clone(),
                                 receiver_email: email,
                                 amount: self.config.cherries_per_check,
                                 hashtag: self.state.hashtags
@@ -251,7 +250,8 @@ impl Program {
         info!(?reviews, "Sending cherries for reviews");
         let mut errors = Vec::with_capacity(reviews.len());
         for review in reviews {
-            if let Err(err) = dbg!(self.reply(review).await) {
+            if let Err(err) = self.reply(review).await {
+                error!("Error while sending cherries: {:?}", err);
                 errors.push(err);
             }
 
@@ -293,7 +293,6 @@ pub struct State {
     bonusly_users: Vec<bonusly::User>,
     /// Map from GitHub username to user info.
     github_members: HashMap<String, github::User>,
-    my_bonusly_email: String,
     hashtags: Vec<String>,
 }
 
@@ -306,7 +305,6 @@ impl State {
             replied_prs: Default::default(),
             bonusly_users: Default::default(),
             github_members: Default::default(),
-            my_bonusly_email: Default::default(),
             hashtags: Default::default(),
             non_replied_prs: Default::default(),
         };
@@ -317,7 +315,6 @@ impl State {
     #[instrument(skip_all)]
     pub async fn update(&mut self, credentials: &Credentials, config: &Config) -> eyre::Result<()> {
         self.last_update = Utc::now();
-        self.my_bonusly_email = credentials.bonusly.my_email().await?;
         self.hashtags = credentials.bonusly.hashtags().await?;
         self.bonusly_users = credentials.bonusly.list_users().await?;
         Ok(())
@@ -330,7 +327,12 @@ impl State {
         config: &Config,
     ) -> eyre::Result<()> {
         let now = Utc::now();
-        if self.last_update + config.state_update_interval >= now {
+        if self.last_update + config.state_update_interval <= now {
+            info!(
+                "Updating state; intended update <= now: {} <= {}",
+                (self.last_update + config.state_update_interval).to_rfc3339(),
+                now.to_rfc3339(),
+            );
             self.update(credentials, config).await?;
         }
         Ok(())

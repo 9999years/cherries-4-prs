@@ -1,7 +1,7 @@
 //! See <https://bonusly.docs.apiary.io/>
 use std::time::Duration;
 
-use color_eyre::eyre::{self, Report, WrapErr};
+use color_eyre::eyre::{self, Report};
 use reqwest::{Client as HttpClient, RequestBuilder};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -145,7 +145,6 @@ pub struct Company {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Bonus {
-    pub giver_email: String,
     pub receiver_email: String,
     pub amount: usize,
     /// Includes the leading `#`!
