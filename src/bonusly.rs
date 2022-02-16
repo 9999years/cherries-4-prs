@@ -1,8 +1,11 @@
 //! See <https://bonusly.docs.apiary.io/>
+use std::time::Duration;
+
 use color_eyre::eyre::{self, Report, WrapErr};
 use reqwest::{Client as HttpClient, RequestBuilder};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 static BONUSLY_API_URL: &str = "https://bonus.ly/api/v1";
 
@@ -28,6 +31,7 @@ impl Client {
             .header("HTTP_APPLICATION_NAME", "cherries-4-prs")
     }
 
+    #[instrument(skip_all)]
     pub async fn list_users(&self) -> eyre::Result<Vec<User>> {
         const LIMIT: usize = 100;
         let mut skip: usize = 0;
@@ -50,6 +54,7 @@ impl Client {
             if done {
                 break;
             }
+            tokio::time::sleep(Duration::from_secs(10)).await;
         }
 
         Ok(ret)

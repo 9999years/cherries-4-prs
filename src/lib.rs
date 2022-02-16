@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::time::Duration;
 use std::{
     collections::HashSet,
     fs::{self, File},
@@ -54,11 +55,13 @@ impl Program {
         })
     }
 
+    #[instrument(skip_all)]
     pub async fn write_state(&self) -> eyre::Result<()> {
         self.state.write_to_path(&self.config.state_path).await?;
         Ok(())
     }
 
+    #[instrument(skip_all)]
     pub async fn new_approved_reviews(
         &self,
     ) -> eyre::Result<HashMap<github::PullRequest, Vec<octocrab::models::pulls::Review>>> {
@@ -90,11 +93,23 @@ impl Program {
                         review.state,
                         Some(octocrab::models::pulls::ReviewState::Approved)
                     ) && !self.state.replied_prs.contains(&RepliedReview {
-                        org: org.to_owned(),
-                        repo: repo.to_owned(),
-                        pr_number: pr.number,
+                        pr: github::PullRequest {
+                            org: org.to_owned(),
+                            repo: repo.to_owned(),
+                            number: pr.number,
+                        },
                         reviewer: review.user.login.clone(),
                     })
+                })
+                .inspect(|review| {
+                    info!(
+                        ?org,
+                        ?repo,
+                        pr_number = pr.number,
+                        reviewer = %review.user.login,
+                        review_id = %review.id,
+                        "Found approved review"
+                    );
                 })
                 .collect::<Vec<_>>();
 
@@ -110,15 +125,43 @@ impl Program {
             }
         }
 
-        // Now, get any missing email reviews we've found emails for.
-        for review in &self.state.missing_email {
-            // TODO
+        for MissingEmail {
+            pr,
+            reviewer: _reviewer,
+            id,
+        } in &self.state.non_replied_prs
+        {
+            let github::PullRequest { org, repo, number } = pr;
+            let review: octocrab::models::pulls::Review = self
+                .credentials
+                .github
+                .get(
+                    format!("/repos/{org}/{repo}/pulls/{number}/reviews/{id}"),
+                    None::<&()>,
+                )
+                .await?;
+            info!(
+                ?org,
+                ?repo,
+                pr_number = pr.number,
+                reviewer = %review.user.login,
+                review_id = %review.id,
+                "Found review missing email"
+            );
+            ret.entry(github::PullRequest {
+                org: org.clone(),
+                repo: repo.clone(),
+                number: *number,
+            })
+            .or_default()
+            .push(review);
         }
 
         Ok(ret)
     }
 
-    pub async fn reviews(&self) -> eyre::Result<Vec<ReviewStatus>> {
+    #[instrument(skip_all)]
+    pub async fn reviews(&mut self) -> eyre::Result<Vec<ReviewStatus>> {
         let mut rng = rand::thread_rng();
         let mut ret = Vec::new();
 
@@ -129,62 +172,111 @@ impl Program {
 
         for (pr, reviews) in self.new_approved_reviews().await? {
             for review in reviews {
-                // TODO cache these in state too
-                let user =
-                    github::User::from_login(&self.credentials.github, &review.user.login).await?;
+                let user = self
+                    .state
+                    .github_user(review.user.login.clone(), &self.credentials)
+                    .await?;
                 let email = self
                     .config
                     .find_bonusly_email(&self.state.bonusly_users, &user);
 
-                ret.push(match email {
-                    Some(email) => ReviewStatus::Ok(bonusly::Bonus {
-                        giver_email: self.state.my_bonusly_email.clone(),
-                        receiver_email: email,
-                        amount: self.config.cherries_per_check,
-                        hashtag: self.state.hashtags[rng.gen_range(0..self.state.hashtags.len())]
-                            .clone(),
-                        reason: format!("thanks for approving my PR! {}", review.html_url),
-                    }),
-                    None => ReviewStatus::MissingEmail({
-                        MissingEmail {
-                            org: pr.org.clone(),
-                            repo: pr.repo.clone(),
-                            pr_number: pr.number,
-                            reviewer: review.user.login,
-                            id: review.id,
+                let missing_email = MissingEmail {
+                    pr: github::PullRequest {
+                        org: pr.org.clone(),
+                        repo: pr.repo.clone(),
+                        number: pr.number,
+                    },
+                    reviewer: review.user.login,
+                    id: review.id,
+                };
+
+                match email {
+                    Some(email) => {
+                        info!(review = ?missing_email, "Found email for review");
+                        self.state.non_replied_prs.remove(&missing_email);
+                        ret.push(ReviewStatus::Ok(
+                            missing_email,
+                            bonusly::Bonus {
+                                giver_email: self.state.my_bonusly_email.clone(),
+                                receiver_email: email,
+                                amount: self.config.cherries_per_check,
+                                hashtag: self.state.hashtags
+                                    [rng.gen_range(0..self.state.hashtags.len())]
+                                .clone(),
+                                reason: format!("thanks for approving my PR! {}", review.html_url),
+                            },
+                        ))
+                    }
+                    None => {
+                        if !self.state.non_replied_prs.contains(&missing_email) {
+                            info!(?missing_email, "Missing email for review");
+                            ret.push(ReviewStatus::MissingEmail(missing_email));
                         }
-                    }),
-                });
+                    }
+                }
             }
         }
         Ok(ret)
     }
 
+    #[instrument(skip(self))]
     pub async fn reply(&mut self, review: ReviewStatus) -> eyre::Result<()> {
         match review {
-            ReviewStatus::Ok(bonus) => {
+            ReviewStatus::Ok(missing_email, bonus) => {
                 let result = self.credentials.bonusly.send_bonus(&bonus).await;
                 tokio::time::sleep(self.config.send_bonus_interval).await;
-                result?;
+                match result {
+                    Ok(reply) => {
+                        info!(?reply, "Sent cherries");
+                        self.state.replied_prs.insert(missing_email.into());
+                    }
+                    Err(err) => {
+                        info!(?err, "Failed to send bonus");
+                        self.state.non_replied_prs.insert(missing_email);
+                        return Err(err);
+                    }
+                }
             }
             ReviewStatus::MissingEmail(missing_email) => {
-                self.state.missing_email.insert(missing_email);
+                self.state.non_replied_prs.insert(missing_email);
             }
         }
 
         Ok(())
     }
 
+    #[instrument(skip_all)]
     pub async fn reply_all_and_wait(&mut self) -> eyre::Result<()> {
         let reviews = self.reviews().await?;
+        info!(?reviews, "Sending cherries for reviews");
         let mut errors = Vec::with_capacity(reviews.len());
         for review in reviews {
-            if let Err(err) = self.reply(review).await {
+            if let Err(err) = dbg!(self.reply(review).await) {
                 errors.push(err);
             }
+
+            let duration = Duration::from_secs(10);
+            info!("Sleeping {:?} before sending next bonus", duration);
+            tokio::time::sleep(duration).await;
         }
+
+        let result = self
+            .state
+            .maybe_update(&self.credentials, &self.config)
+            .await;
+        self.state.cutoff = Utc::now();
+        self.write_state().await?;
+        result?;
+
+        info!("Sleeping for {:?}", self.config.pr_check_interval);
         tokio::time::sleep(self.config.pr_check_interval).await;
-        Ok(())
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            // TODO this is probably really ugly formatting
+            Err(eyre::eyre!("{:?}", errors))
+        }
     }
 }
 
@@ -192,12 +284,15 @@ impl Program {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct State {
     last_update: DateTime<Utc>,
+    /// PR-reviewer combos we've already replied to; don't send cherries more
+    /// than once per reviewer per PR.
     replied_prs: HashSet<RepliedReview>,
-    missing_email: HashSet<MissingEmail>,
+    non_replied_prs: HashSet<MissingEmail>,
     /// "Don't look for PRs before this datetime"
     cutoff: DateTime<Utc>,
     bonusly_users: Vec<bonusly::User>,
-    github_members: Vec<github::User>,
+    /// Map from GitHub username to user info.
+    github_members: HashMap<String, github::User>,
     my_bonusly_email: String,
     hashtags: Vec<String>,
 }
@@ -206,14 +301,14 @@ impl State {
     #[instrument(skip_all)]
     pub async fn new(credentials: &Credentials, config: &Config) -> eyre::Result<Self> {
         let mut ret = Self {
-            cutoff: Utc::now(),
+            cutoff: Utc::now() - chrono::Duration::from_std(config.pr_check_interval).unwrap(),
             last_update: Utc::now(),
             replied_prs: Default::default(),
             bonusly_users: Default::default(),
             github_members: Default::default(),
             my_bonusly_email: Default::default(),
             hashtags: Default::default(),
-            missing_email: Default::default(),
+            non_replied_prs: Default::default(),
         };
         ret.update(credentials, config).await?;
         Ok(ret)
@@ -221,15 +316,23 @@ impl State {
 
     #[instrument(skip_all)]
     pub async fn update(&mut self, credentials: &Credentials, config: &Config) -> eyre::Result<()> {
+        self.last_update = Utc::now();
         self.my_bonusly_email = credentials.bonusly.my_email().await?;
         self.hashtags = credentials.bonusly.hashtags().await?;
         self.bonusly_users = credentials.bonusly.list_users().await?;
-        // TODO: pagination here too
-        self.github_members = credentials
-            .github
-            .get(format!("orgs/{}/members", config.github.org), None::<&()>)
-            .await?;
-        self.last_update = Utc::now();
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    pub async fn maybe_update(
+        &mut self,
+        credentials: &Credentials,
+        config: &Config,
+    ) -> eyre::Result<()> {
+        let now = Utc::now();
+        if self.last_update + config.state_update_interval >= now {
+            self.update(credentials, config).await?;
+        }
         Ok(())
     }
 
@@ -259,19 +362,35 @@ impl State {
         serde_json::to_writer_pretty(BufWriter::new(File::create(data_path)?), &self)?;
         Ok(())
     }
+
+    #[instrument(skip(self, credentials))]
+    pub async fn github_user(
+        &mut self,
+        login: String,
+        credentials: &Credentials,
+    ) -> eyre::Result<github::User> {
+        let maybe_user = self.github_members.get(&login);
+        match maybe_user {
+            Some(user) => Ok(user.clone()),
+            None => {
+                let user = github::User::from_login(&credentials.github, &login).await?;
+                self.github_members.insert(login.clone(), user);
+                // TODO there has got to be a better way to do this
+                Ok(self.github_members.get(&login).unwrap().clone())
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum ReviewStatus {
-    Ok(bonusly::Bonus),
+    Ok(MissingEmail, bonusly::Bonus),
     MissingEmail(MissingEmail),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct MissingEmail {
-    org: String,
-    repo: String,
-    pr_number: i64,
+    pr: github::PullRequest,
     // GitHub username
     reviewer: String,
     id: ReviewId,
@@ -279,9 +398,16 @@ pub struct MissingEmail {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct RepliedReview {
-    org: String,
-    repo: String,
-    pr_number: i64,
+    pr: github::PullRequest,
     // GitHub username
     reviewer: String,
+}
+
+impl From<MissingEmail> for RepliedReview {
+    fn from(missing_email: MissingEmail) -> Self {
+        Self {
+            pr: missing_email.pr,
+            reviewer: missing_email.reviewer,
+        }
+    }
 }

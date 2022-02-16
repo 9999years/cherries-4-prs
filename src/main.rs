@@ -20,18 +20,11 @@ pub async fn main() -> eyre::Result<()> {
     let mut prg = Program::from_config_path(args.config.clone()).await?;
 
     loop {
-        let reviews = prg.reviews().await?;
-
-        prg.write_state().await?;
-
-        tokio::time::sleep(prg.config.pr_check_interval).await;
+        prg.reply_all_and_wait().await?;
     }
-
-    Ok(())
 }
 
 fn install_tracing(filter_directives: &str) {
-    use tracing_error::ErrorLayer;
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::{
         fmt::{self, format::FmtSpan, time::UtcTime},
@@ -40,7 +33,7 @@ fn install_tracing(filter_directives: &str) {
 
     let fmt_layer = fmt::layer()
         .with_target(false)
-        .with_span_events(FmtSpan::ACTIVE)
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .without_time();
     let filter_layer = EnvFilter::try_new(filter_directives)
         .or_else(|_| EnvFilter::try_from_default_env())
@@ -48,9 +41,8 @@ fn install_tracing(filter_directives: &str) {
         .unwrap();
 
     tracing_subscriber::registry()
-        .with(filter_layer)
         .with(fmt_layer)
-        .with(ErrorLayer::default())
+        .with(filter_layer)
         .init();
 }
 
