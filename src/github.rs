@@ -23,6 +23,7 @@ pub struct Config {
     pub user: String,
     pub org: String,
     /// Map from GitHub usernames to Starry emails
+    #[serde(default)]
     pub emails: HashMap<String, String>,
 }
 

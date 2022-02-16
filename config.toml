@@ -1,0 +1,36 @@
+# Wait for this many minutes between checking for newly reviewed PRs.
+pr_check_minutes = 15
+
+# Wait for this many days between refreshing the list of Bonusly users, etc.
+# This can be pretty long because the data should only go out of date when new
+# people are hired.
+state_update_days = 7
+
+# Wait for this many seconds after sending cherries through Bonusly.
+# This is just to prevent API spam.
+send_bonus_delay_seconds = 60
+
+# Number of cherries to send for approving a PR. [Optional.]
+cherries_per_check = 1
+
+# Path to a TOML file with GitHub and Bonusly credentials, relative to this
+# file or absolute. This file should have a `bonusly` key and a `github` key,
+# each with a string API token.
+credentials_path = "credentials.toml"
+
+# Path to a JSON file to store program state in, relative to this file or
+# absolute. This file includes cached GitHub usernames, Bonusly users, PRs that
+# have already been replied to, PRs that cherries-4-prs can't determine an
+# email for, etc.
+data_path = "state.json"
+
+[github]
+# Your username; cherries-4-prs searches for PRs opened by this user.
+user = "your_username"
+# Your GitHub organization; cherries-4-prs searches for PRs in this org.
+org = "your_organization"
+
+[github.emails]
+# This section maps GitHub usernames (keys) to Bonusly emails (values) for when
+# cherries-4-prs can't match a GitHub profile to a Bonusly profile automatically.
+usernames_here = "emails_here@starry.com"
