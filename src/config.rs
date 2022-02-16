@@ -13,6 +13,8 @@ use crate::github;
 
 const SECONDS_PER_MINUTE: u64 = 60;
 
+const NAME_REPLACEMENTS: [(&str, &str); 1] = [("Matthew", "Matt")];
+
 #[derive(Clone)]
 pub struct Config {
     pub path: PathBuf,
@@ -53,6 +55,7 @@ impl Config {
         })
     }
 
+    /// Find the bonusly email for a given GitHub user.
     pub fn find_bonusly_email(
         &self,
         users: &[bonusly::User],
@@ -72,8 +75,24 @@ impl Config {
         // Otherwise, use full names / display names.
         for user in users {
             if let Some(name) = &find.name {
+                // N.b.: no bonusly users in the current data have
+                // `full_name != display_name`.
                 if &user.full_name == name || &user.display_name == name {
                     return Some(user.email.clone());
+                }
+
+                // Try a prefix match, for e.g. "Justin Wood (Callek)"
+                if !user.full_name.is_empty() && name.starts_with(&user.full_name) {
+                    return Some(user.email.clone());
+                }
+
+                // Try replacing e.g. "Matthew" with "Matt" to see if we get a
+                // match.
+                for (needle, haystack) in NAME_REPLACEMENTS {
+                    let replaced = user.full_name.replace(needle, haystack);
+                    if &replaced == name {
+                        return Some(user.email.clone());
+                    }
                 }
             }
         }

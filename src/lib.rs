@@ -287,12 +287,15 @@ pub struct State {
     /// PR-reviewer combos we've already replied to; don't send cherries more
     /// than once per reviewer per PR.
     replied_prs: HashSet<RepliedReview>,
+    /// Reviews we haven't replied to; missing emails or API errors.
     non_replied_prs: HashSet<MissingEmail>,
     /// "Don't look for PRs before this datetime"
     cutoff: DateTime<Utc>,
+    /// All bonusly users, for correlation with GitHub users.
     bonusly_users: Vec<bonusly::User>,
     /// Map from GitHub username to user info.
     github_members: HashMap<String, github::User>,
+    /// Bonusly hashtags.
     hashtags: Vec<String>,
 }
 
@@ -313,7 +316,11 @@ impl State {
     }
 
     #[instrument(skip_all)]
-    pub async fn update(&mut self, credentials: &Credentials, config: &Config) -> eyre::Result<()> {
+    pub async fn update(
+        &mut self,
+        credentials: &Credentials,
+        _config: &Config,
+    ) -> eyre::Result<()> {
         self.last_update = Utc::now();
         self.hashtags = credentials.bonusly.hashtags().await?;
         self.bonusly_users = credentials.bonusly.list_users().await?;
@@ -328,11 +335,6 @@ impl State {
     ) -> eyre::Result<()> {
         let now = Utc::now();
         if self.last_update + config.state_update_interval <= now {
-            info!(
-                "Updating state; intended update <= now: {} <= {}",
-                (self.last_update + config.state_update_interval).to_rfc3339(),
-                now.to_rfc3339(),
-            );
             self.update(credentials, config).await?;
         }
         Ok(())
