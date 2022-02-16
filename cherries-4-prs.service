@@ -1,0 +1,10 @@
+[Unit]
+Description=cherries-4-prs
+
+[Service]
+ExecStart=/var/lib/cherries-4-prs/cherries-4-prs config.toml
+WorkingDirectory=/var/lib/cherries-4-prs
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
