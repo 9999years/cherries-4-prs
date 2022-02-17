@@ -227,6 +227,7 @@ impl Program {
                         Notification {
                             title: format!("Send cherries to {}", review.reviewer),
                             message: format!("cherries-4-prs sent cherries: {:?}", reply),
+                            user: self.config.notify_send_user.clone(),
                         }
                         .send_unchecked();
                         self.state.replied_prs.insert(review.into());
@@ -236,6 +237,7 @@ impl Program {
                         Notification {
                             title: format!("Failed to send cherries to {}", review.reviewer),
                             message: format!("Bonusly API error: {:?}", err),
+                            user: self.config.notify_send_user.clone(),
                         }
                         .send_unchecked();
                         self.state.non_replied_prs.insert(review);
@@ -262,6 +264,7 @@ impl Program {
                                 .unwrap_or_default())
                             .unwrap_or_default()
                     ),
+                    user: self.config.notify_send_user.clone(),
                 }
                 .send_unchecked();
                 self.state.non_replied_prs.insert(review);

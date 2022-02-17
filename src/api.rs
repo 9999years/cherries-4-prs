@@ -40,6 +40,8 @@ pub struct Config {
     pub state_update_days: i64,
     #[serde(default = "send_bonus_delay_seconds_default")]
     pub send_bonus_delay_seconds: u64,
+    #[serde(default)]
+    pub notify_send_user: Option<String>,
 }
 
 fn send_bonus_delay_seconds_default() -> u64 {
