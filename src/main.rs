@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use color_eyre::eyre;
 use structopt::StructOpt;
+use tracing::info;
 
 use cherries_4_prs::*;
 
@@ -12,6 +13,7 @@ pub async fn main() -> eyre::Result<()> {
     color_eyre::install()?;
 
     let mut prg = Program::from_config_path(args.config.clone()).await?;
+    info!("Ready!");
 
     loop {
         prg.reply_all_and_wait().await?;
@@ -21,7 +23,7 @@ pub async fn main() -> eyre::Result<()> {
 fn install_tracing(filter_directives: &str) {
     use tracing_subscriber::prelude::*;
     use tracing_subscriber::{
-        fmt::{self, format::FmtSpan, time::UtcTime},
+        fmt::{self, format::FmtSpan},
         EnvFilter,
     };
 
