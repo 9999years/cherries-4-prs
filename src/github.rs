@@ -81,10 +81,10 @@ pub struct RepliedReview {
 }
 
 impl From<NonRepliedReview> for RepliedReview {
-    fn from(missing_email: NonRepliedReview) -> Self {
+    fn from(review: NonRepliedReview) -> Self {
         Self {
-            pr: missing_email.pr,
-            reviewer: missing_email.reviewer,
+            pr: review.pr,
+            reviewer: review.reviewer,
         }
     }
 }

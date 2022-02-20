@@ -215,17 +215,24 @@ impl Program {
     #[instrument(skip(self), level = "debug")]
     async fn reply(&mut self, review: ReviewStatus) -> eyre::Result<()> {
         match review {
-            ReviewStatus::Ok(missing_email, bonus) => {
+            ReviewStatus::Ok(review, bonus) => {
+                if self.state.replied_prs.contains(&review.clone().into()) {
+                    // Already replied to this PR-reviewer combo; this can
+                    // happen if a reviewer approves a PR twice in one "check
+                    // interval", because `new_approved_reviews` doesn't mutate
+                    // `self.state.replied_prs`.
+                    return Ok(());
+                }
                 let result = self.credentials.bonusly.send_bonus(&bonus).await;
                 tokio::time::sleep(self.config.send_bonus_interval).await;
                 match result {
                     Ok(reply) => {
                         info!(?reply, "Sent cherries");
-                        self.state.replied_prs.insert(missing_email.into());
+                        self.state.replied_prs.insert(review.into());
                     }
                     Err(err) => {
                         info!(?err, "Failed to send bonus");
-                        self.state.non_replied_prs.insert(missing_email);
+                        self.state.non_replied_prs.insert(review);
                         return Err(err);
                     }
                 }
