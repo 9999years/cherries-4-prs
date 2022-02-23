@@ -5,6 +5,7 @@ use std::process::Command;
 use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
 use tracing::debug;
+use tracing::instrument;
 
 pub struct Notification {
     pub title: String,
@@ -34,6 +35,7 @@ impl Notification {
                     ("DISPLAY", ":0".to_owned()),
                     ("DBUS_SESSION_BUS_ADDRESS", {
                         let uid = run_command(Command::new("id").args(["-u", user]))?;
+                        let uid = uid.trim();
 
                         format!("unix:path=/run/user/{uid}/bus")
                     }),
@@ -42,7 +44,13 @@ impl Notification {
             None => ("notify-send", vec![], vec![]),
         };
 
-        run_command(Command::new(cmd_name).args(args).envs(envs)).map(|_| ())
+        run_command(
+            Command::new(cmd_name)
+                .args(args)
+                .args([&self.title, &self.message])
+                .envs(envs),
+        )
+        .map(|_| ())
     }
 
     pub fn send_unchecked(&self) {
@@ -52,6 +60,7 @@ impl Notification {
     }
 }
 
+#[instrument(level = "debug")]
 fn run_command(cmd: &mut Command) -> eyre::Result<String> {
     let cmd_name = cmd.get_program().to_owned();
     let output = cmd
