@@ -24,6 +24,13 @@ credentials_path = "credentials.toml"
 # email for, etc.
 data_path = "state.json"
 
+# If given, cherries-4-prs will notify you about sent cherries and missing
+# emails using `sudo -u <NOTIFY_SEND_USER> notify-send`; otherwise,
+# `notify-send` will be used directly (which will result in the notifications
+# being gobbled if you're running cherries-4-prs as another user, for example as
+# root in a systemd service).
+notify_send_user = "rturner"
+
 [github]
 # Your username; cherries-4-prs searches for PRs opened by this user.
 user = "your_username"

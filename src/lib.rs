@@ -21,6 +21,9 @@ mod credentials;
 pub mod github;
 pub use config::*;
 pub use credentials::*;
+mod notify_send;
+
+use notify_send::Notification;
 
 #[derive(Debug)]
 pub enum ReviewStatus {
@@ -215,27 +218,56 @@ impl Program {
     #[instrument(skip(self), level = "debug")]
     async fn reply(&mut self, review: ReviewStatus) -> eyre::Result<()> {
         match review {
-            ReviewStatus::Ok(missing_email, bonus) => {
+            ReviewStatus::Ok(review, bonus) => {
                 let result = self.credentials.bonusly.send_bonus(&bonus).await;
                 tokio::time::sleep(self.config.send_bonus_interval).await;
                 match result {
                     Ok(reply) => {
                         info!(?reply, "Sent cherries");
-                        self.state.replied_prs.insert(missing_email.into());
+                        Notification {
+                            title: format!("Send cherries to {}", review.reviewer),
+                            message: format!("cherries-4-prs sent cherries: {:?}", reply),
+                            user: self.config.notify_send_user.clone(),
+                        }
+                        .send_unchecked();
+                        self.state.replied_prs.insert(review.into());
                     }
                     Err(err) => {
                         info!(?err, "Failed to send bonus");
-                        self.state.non_replied_prs.insert(missing_email);
+                        Notification {
+                            title: format!("Failed to send cherries to {}", review.reviewer),
+                            message: format!("Bonusly API error: {:?}", err),
+                            user: self.config.notify_send_user.clone(),
+                        }
+                        .send_unchecked();
+                        self.state.non_replied_prs.insert(review);
                         return Err(err);
                     }
                 }
             }
-            ReviewStatus::MissingEmail(missing_email) => {
+            ReviewStatus::MissingEmail(review) => {
                 info!(
-                    user = %missing_email.reviewer,
+                    user = %review.reviewer,
                     "No email found for GitHub reviewer"
                 );
-                self.state.non_replied_prs.insert(missing_email);
+                Notification {
+                    title: format!("No Bonusly email for GitHub user {}", review.reviewer),
+                    message: format!(
+                        "cherries-4-prs couldn't find a Bonusly email for GitHub user {} ({})",
+                        review.reviewer,
+                        self.state
+                            .github_user(review.reviewer.clone(), &self.credentials)
+                            .await
+                            .map(|user| user
+                                .name
+                                .map(|name| format!(" ({name})"))
+                                .unwrap_or_default())
+                            .unwrap_or_default()
+                    ),
+                    user: self.config.notify_send_user.clone(),
+                }
+                .send_unchecked();
+                self.state.non_replied_prs.insert(review);
             }
         }
 

@@ -25,6 +25,7 @@ pub struct Config {
     pub pr_check_interval: Duration,
     pub state_update_interval: chrono::Duration,
     pub send_bonus_interval: Duration,
+    pub notify_send_user: Option<String>,
 }
 
 impl Config {
@@ -52,6 +53,7 @@ impl Config {
             pr_check_interval: Duration::from_secs(config.pr_check_minutes * SECONDS_PER_MINUTE),
             state_update_interval: chrono::Duration::days(config.state_update_days),
             send_bonus_interval: Duration::from_secs(config.send_bonus_delay_seconds),
+            notify_send_user: config.notify_send_user,
         })
     }
 

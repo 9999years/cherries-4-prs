@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
@@ -65,6 +66,12 @@ pub struct PullRequest {
     pub number: i64,
 }
 
+impl Display for PullRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}#{}", self.org, self.repo, self.number)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct NonRepliedReview {
     pub pr: PullRequest,
@@ -73,11 +80,27 @@ pub struct NonRepliedReview {
     pub id: ReviewId,
 }
 
+impl Display for NonRepliedReview {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} reviewed by {} (ID {})",
+            self.pr, self.reviewer, self.id
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct RepliedReview {
     pub pr: PullRequest,
     // GitHub username
     pub reviewer: String,
+}
+
+impl Display for RepliedReview {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} reviewed by {}", self.pr, self.reviewer)
+    }
 }
 
 impl From<NonRepliedReview> for RepliedReview {
