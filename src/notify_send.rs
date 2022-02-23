@@ -15,7 +15,15 @@ pub struct Notification {
 impl Notification {
     pub fn send(&self) -> eyre::Result<()> {
         let (cmd_name, args) = match &self.user {
-            Some(user) => ("sudo", vec!["-u", &user, "notify-send"]),
+            Some(user) => (
+                "sudo",
+                vec![
+                    "-u",
+                    &user,
+                    "--preserve-env=DISPLAY,DBUS_SESSION_BUS_ADDRESS",
+                    "notify-send",
+                ],
+            ),
             None => ("notify-send", vec![]),
         };
 
